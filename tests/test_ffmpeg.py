@@ -49,6 +49,34 @@ def make_config(encoder: str = "software"):
     )
 
 
+def make_config_with_timeout(seconds: int):
+    raw = {
+        "output": {
+            "url": "rtsp://192.168.64.10:8554/camera_wall",
+            "width": 1920,
+            "height": 1080,
+            "fps": 15,
+            "bitrate": "5M",
+            "encoder": "software",
+        },
+        "ffmpeg": {
+            "input_timeout_seconds": seconds,
+        },
+        "inputs": [
+            {
+                "name": "camera-1",
+                "enabled": True,
+                "url": "rtsp://user:pass@192.168.64.21/stream1",
+                "x": 0,
+                "y": 0,
+                "width": 960,
+                "height": 540,
+            },
+        ],
+    }
+    return parse_config(raw)
+
+
 class FfmpegTests(unittest.TestCase):
     def test_filter_preserves_aspect_and_pads_first_layout(self) -> None:
         graph = build_filter_graph(make_config())
@@ -65,9 +93,16 @@ class FfmpegTests(unittest.TestCase):
 
         self.assertIn("libx264", command)
         self.assertIn("zerolatency", command)
+        self.assertNotIn("-rw_timeout", command)
         self.assertIn("-bufsize", command)
         self.assertEqual(command[command.index("-bufsize") + 1], "10M")
         self.assertEqual(command[-1], "rtsp://192.168.64.10:8554/camera_wall")
+
+    def test_input_timeout_is_optional(self) -> None:
+        command = build_ffmpeg_command(make_config_with_timeout(15))
+
+        self.assertIn("-rw_timeout", command)
+        self.assertEqual(command[command.index("-rw_timeout") + 1], "15000000")
 
     def test_vaapi_encoder_args(self) -> None:
         command = build_ffmpeg_command(make_config("vaapi"))

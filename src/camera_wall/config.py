@@ -49,7 +49,7 @@ class FfmpegConfig:
     binary: str = "ffmpeg"
     log_level: str = "info"
     input_rtsp_transport: str = "tcp"
-    input_timeout_seconds: int = 15
+    input_timeout_seconds: int = 0
     http_reconnect_delay_max_seconds: int = 5
     restart_delay_seconds: int = 5
 
@@ -114,8 +114,8 @@ def parse_config(raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -
         input_rtsp_transport=_transport(
             ffmpeg_raw.get("input_rtsp_transport", "tcp"), "ffmpeg.input_rtsp_transport"
         ),
-        input_timeout_seconds=_positive_int(
-            ffmpeg_raw.get("input_timeout_seconds", 15), "ffmpeg.input_timeout_seconds"
+        input_timeout_seconds=_nonnegative_int(
+            ffmpeg_raw.get("input_timeout_seconds", 0), "ffmpeg.input_timeout_seconds"
         ),
         http_reconnect_delay_max_seconds=_positive_int(
             ffmpeg_raw.get("http_reconnect_delay_max_seconds", 5),

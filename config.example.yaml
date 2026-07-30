@@ -13,7 +13,7 @@ output:
 ffmpeg:
   log_level: info
   input_rtsp_transport: tcp
-  input_timeout_seconds: 15
+  input_timeout_seconds: 0
   http_reconnect_delay_max_seconds: 5
   restart_delay_seconds: 5
 

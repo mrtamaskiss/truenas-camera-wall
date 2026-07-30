@@ -44,7 +44,9 @@ def build_ffmpeg_command(config: AppConfig) -> list[str]:
                     str(ffmpeg.http_reconnect_delay_max_seconds),
                 ]
             )
-        args.extend(["-rw_timeout", timeout_us, "-i", input_cfg.url])
+        if ffmpeg.input_timeout_seconds > 0:
+            args.extend(["-rw_timeout", timeout_us])
+        args.extend(["-i", input_cfg.url])
 
     filter_graph = build_filter_graph(config)
     args.extend(["-filter_complex", filter_graph, "-map", "[wall]", "-an"])

@@ -115,8 +115,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.1 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.1
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.2 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.2
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -155,7 +155,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.1
+    image: ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.2
     restart: unless-stopped
     environment:
       CAMERA_WALL_CONFIG: /config/config.yaml
@@ -195,7 +195,7 @@ ffplay rtsp://192.168.64.10:8554/camera_wall
 - go2rtc RTSP ingest supports incoming RTSP, but the target stream must exist first with an empty source.
 - Browser compatibility is simplest with H.264 video. This app encodes `yuv420p` for software mode and `nv12` for hardware encoders.
 - RTSP input is forced to TCP by default for camera stability.
-- FFmpeg reconnect options are strongest for HTTP inputs. For RTSP, the supervisor restarts the whole pipeline after input timeout or FFmpeg exit.
+- FFmpeg reconnect options are strongest for HTTP inputs. For RTSP, the supervisor restarts the whole pipeline after FFmpeg exits. `ffmpeg.input_timeout_seconds` is disabled by default because some FFmpeg builds reject `-rw_timeout`.
 - Hardware acceleration depends on the host kernel, `/dev/dri`, driver support, and the FFmpeg build. Use `software` as the baseline.
 
 ## References

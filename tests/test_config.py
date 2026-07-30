@@ -79,6 +79,23 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(len(config.enabled_inputs), 1)
 
+    def test_allows_zero_input_timeout(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "ffmpeg": {
+                "input_timeout_seconds": 0,
+            },
+        }
+        config = parse_config(
+            raw,
+            {
+                "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                "CAMERA_1_URL": "rtsp://camera/stream1",
+            },
+        )
+
+        self.assertEqual(config.ffmpeg.input_timeout_seconds, 0)
+
     def test_rejects_out_of_bounds_layout(self) -> None:
         raw = {
             **BASE_CONFIG,
