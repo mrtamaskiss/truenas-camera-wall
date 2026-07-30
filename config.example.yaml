@@ -1,0 +1,52 @@
+# Example configuration. Keep real passwords out of this file and out of git.
+output:
+  url: ${OUTPUT_URL:-rtsp://192.168.64.10:8554/camera_wall}
+  width: 1920
+  height: 1080
+  fps: 15
+  bitrate: ${CAMERA_WALL_BITRATE:-5M}
+  encoder: ${CAMERA_WALL_ENCODER:-software}
+  rtsp_transport: tcp
+  vaapi_device: /dev/dri/renderD128
+  qsv_device: /dev/dri/renderD128
+
+ffmpeg:
+  log_level: info
+  input_rtsp_transport: tcp
+  input_timeout_seconds: 15
+  http_reconnect_delay_max_seconds: 5
+  restart_delay_seconds: 5
+
+inputs:
+  - name: camera-1
+    enabled: true
+    url: ${CAMERA_1_URL}
+    label: Camera 1
+    x: 0
+    y: 0
+    width: 960
+    height: 540
+    preserve_aspect: true
+    pad_color: black
+
+  - name: camera-2
+    enabled: true
+    url: ${CAMERA_2_URL}
+    label: Camera 2
+    x: 960
+    y: 0
+    width: 960
+    height: 540
+    preserve_aspect: true
+    pad_color: black
+
+  - name: camera-3
+    enabled: true
+    url: ${CAMERA_3_URL}
+    label: Camera 3
+    x: 0
+    y: 540
+    width: 1920
+    height: 540
+    preserve_aspect: true
+    pad_color: black

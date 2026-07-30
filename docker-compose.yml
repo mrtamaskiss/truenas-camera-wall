@@ -1,0 +1,17 @@
+services:
+  camera-wall:
+    build: .
+    image: truenas-camera-wall:local
+    restart: unless-stopped
+    environment:
+      CAMERA_WALL_CONFIG: /config/config.yaml
+      OUTPUT_URL: ${OUTPUT_URL:-rtsp://192.168.64.10:8554/camera_wall}
+      CAMERA_WALL_BITRATE: ${CAMERA_WALL_BITRATE:-5M}
+      CAMERA_WALL_ENCODER: ${CAMERA_WALL_ENCODER:-software}
+      CAMERA_1_URL: ${CAMERA_1_URL}
+      CAMERA_2_URL: ${CAMERA_2_URL}
+      CAMERA_3_URL: ${CAMERA_3_URL}
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+    devices:
+      - /dev/dri:/dev/dri
