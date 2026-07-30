@@ -9,6 +9,7 @@ from .config import AppConfig, InputConfig
 
 _BITRATE_RE = re.compile(r"^(\d+)([kKmM]?)$")
 _URL_CREDENTIAL_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]*://)([^/\s:@]+):([^@\s/]+)@([^/\s]+)")
+_VAAPI_DEVICE_NAME = "camera_wall_vaapi"
 
 
 def build_ffmpeg_command(config: AppConfig) -> list[str]:
@@ -25,7 +26,14 @@ def build_ffmpeg_command(config: AppConfig) -> list[str]:
     ]
 
     if output.encoder == "vaapi":
-        args.extend(["-vaapi_device", output.vaapi_device])
+        args.extend(
+            [
+                "-init_hw_device",
+                f"vaapi={_VAAPI_DEVICE_NAME}:{output.vaapi_device}",
+                "-filter_hw_device",
+                _VAAPI_DEVICE_NAME,
+            ]
+        )
     elif output.encoder == "qsv":
         args.extend(["-qsv_device", output.qsv_device])
 

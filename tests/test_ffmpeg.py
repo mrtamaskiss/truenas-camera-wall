@@ -119,7 +119,14 @@ class FfmpegTests(unittest.TestCase):
         command = build_ffmpeg_command(make_config("vaapi"))
         graph = build_filter_graph(make_config("vaapi"))
 
-        self.assertIn("-vaapi_device", command)
+        self.assertIn("-init_hw_device", command)
+        self.assertEqual(
+            command[command.index("-init_hw_device") + 1],
+            "vaapi=camera_wall_vaapi:/dev/dri/renderD128",
+        )
+        self.assertIn("-filter_hw_device", command)
+        self.assertEqual(command[command.index("-filter_hw_device") + 1], "camera_wall_vaapi")
+        self.assertNotIn("-vaapi_device", command)
         self.assertIn("h264_vaapi", command)
         self.assertIn("-rc_mode", command)
         self.assertEqual(command[command.index("-rc_mode") + 1], "CQP")
