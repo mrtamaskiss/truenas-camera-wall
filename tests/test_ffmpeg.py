@@ -1,7 +1,7 @@
 import unittest
 
 from camera_wall.config import parse_config
-from camera_wall.ffmpeg import build_ffmpeg_command, build_filter_graph, masked_command
+from camera_wall.ffmpeg import build_ffmpeg_command, build_filter_graph, mask_text, masked_command
 
 
 def make_config(
@@ -168,6 +168,12 @@ class FfmpegTests(unittest.TestCase):
 
     def test_masked_command_hides_credentials(self) -> None:
         rendered = masked_command(build_ffmpeg_command(make_config()))
+
+        self.assertNotIn("user:pass", rendered)
+        self.assertIn("rtsp://***:***@192.168.64.21/stream1", rendered)
+
+    def test_mask_text_hides_credentials_inside_log_lines(self) -> None:
+        rendered = mask_text("Input failed: rtsp://user:pass@192.168.64.21/stream1")
 
         self.assertNotIn("user:pass", rendered)
         self.assertIn("rtsp://***:***@192.168.64.21/stream1", rendered)

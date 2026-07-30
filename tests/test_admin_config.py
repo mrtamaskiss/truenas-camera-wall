@@ -9,6 +9,7 @@ import urllib.request
 
 from camera_wall.admin_config import load_admin_config, save_admin_config
 from camera_wall.config import ConfigError
+from camera_wall.log_buffer import clear_logs
 from camera_wall.web import WebSettings, start_admin_server
 
 
@@ -96,6 +97,12 @@ class FakeSupervisor:
 
 
 class WebTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_logs()
+
+    def tearDown(self) -> None:
+        clear_logs()
+
     def test_admin_api_requires_basic_auth(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             server, thread = self._start_server(Path(tmp, "config.yaml"), FakeSupervisor())
@@ -131,6 +138,29 @@ class WebTests(unittest.TestCase):
                 self.assertTrue(payload["ok"])
                 self.assertEqual(supervisor.restart_count, 1)
                 self.assertIn("camera-2", path.read_text(encoding="utf-8"))
+            finally:
+                self._stop_server(server, thread)
+
+    def test_admin_api_returns_logs_and_config_download(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "config.yaml")
+            save_admin_config(path, valid_admin_config(1))
+            server, thread = self._start_server(path, FakeSupervisor())
+            try:
+                logs_request = self._request(
+                    f"http://127.0.0.1:{server.server_port}/api/logs?limit=20"
+                )
+                with urllib.request.urlopen(logs_request, timeout=5) as response:
+                    logs_payload = json.loads(response.read().decode("utf-8"))
+                self.assertIn("logs", logs_payload)
+
+                config_request = self._request(
+                    f"http://127.0.0.1:{server.server_port}/api/config.yaml"
+                )
+                with urllib.request.urlopen(config_request, timeout=5) as response:
+                    body = response.read().decode("utf-8")
+                self.assertIn("camera-1", body)
+                self.assertIn("rtsp://user:pass@", body)
             finally:
                 self._stop_server(server, thread)
 

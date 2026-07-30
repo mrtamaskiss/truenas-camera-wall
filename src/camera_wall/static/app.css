@@ -114,7 +114,8 @@ label {
 .brand,
 .actions,
 .section-heading,
-.layout-tools {
+.layout-tools,
+.status-tools {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -182,12 +183,14 @@ h3 {
   grid-template-columns: minmax(280px, 380px) minmax(360px, 1fr);
   grid-template-areas:
     "output layout"
+    "status status"
     "cameras cameras";
   gap: 0;
 }
 
 .output-section,
 .layout-section,
+.status-section,
 .camera-section {
   min-width: 0;
   padding: 22px;
@@ -201,6 +204,11 @@ h3 {
 
 .layout-section {
   grid-area: layout;
+  border-bottom: 1px solid var(--border);
+}
+
+.status-section {
+  grid-area: status;
   border-bottom: 1px solid var(--border);
 }
 
@@ -322,6 +330,67 @@ h3 {
   gap: 8px;
 }
 
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.status-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+}
+
+.status-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.status-card strong {
+  display: block;
+  min-height: 22px;
+  overflow-wrap: anywhere;
+  padding-top: 4px;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.command-box,
+.log-panel {
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #111816;
+  color: #e8f0ed;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  letter-spacing: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.command-box {
+  min-height: 52px;
+  max-height: 150px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+}
+
+.log-panel {
+  min-height: 180px;
+  max-height: 360px;
+  margin: 0;
+  padding: 12px;
+}
+
 .toast {
   position: fixed;
   right: 18px;
@@ -367,6 +436,7 @@ h3 {
     grid-template-areas:
       "output"
       "layout"
+      "status"
       "cameras";
   }
 
@@ -393,13 +463,15 @@ h3 {
   }
 
   .section-heading,
-  .layout-tools {
+  .layout-tools,
+  .status-tools {
     align-items: stretch;
     flex-direction: column;
   }
 
   button,
   .layout-tools,
+  .status-tools,
   .actions {
     width: 100%;
   }

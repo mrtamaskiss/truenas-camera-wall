@@ -10,8 +10,9 @@ import sys
 import threading
 import time
 
-from .config import ConfigError, load_config
-from .ffmpeg import build_ffmpeg_command, masked_command
+from .config import AppConfig, ConfigError, load_config
+from .ffmpeg import build_ffmpeg_command, mask_text, masked_command
+from .log_buffer import install_log_buffer
 from .web import WebSettings, start_admin_server
 
 
@@ -27,12 +28,13 @@ class CameraWallSupervisor:
         self.stop_requested = threading.Event()
         self.restart_requested = threading.Event()
         self._lock = threading.Lock()
-        self._current_process: subprocess.Popen[bytes] | None = None
+        self._current_process: subprocess.Popen[str] | None = None
         self._restart_reason: str | None = None
         self._last_error: str | None = None
         self._last_exit_code: int | None = None
         self._last_command: str | None = None
         self._last_started_at: str | None = None
+        self._runtime: dict[str, object] = {}
         self._restart_count = 0
         self._restart_delay_seconds = 5
 
@@ -46,13 +48,17 @@ class CameraWallSupervisor:
                 command = build_ffmpeg_command(config)
                 self._restart_delay_seconds = config.ffmpeg.restart_delay_seconds
             except ConfigError as exc:
-                self._set_state(last_error=str(exc), last_command=None)
+                self._set_state(last_error=str(exc), last_command=None, runtime={})
                 logging.error("Configuration error: %s", exc)
                 self._sleep_or_wake(self._restart_delay_seconds)
                 continue
 
             rendered_command = masked_command(command)
-            self._set_state(last_error=None, last_command=rendered_command)
+            self._set_state(
+                last_error=None,
+                last_command=rendered_command,
+                runtime=_runtime_summary(config),
+            )
             logging.info("FFmpeg command: %s", rendered_command)
             exit_code = self._run_once(command)
             if self.stop_requested.is_set():
@@ -99,12 +105,29 @@ class CameraWallSupervisor:
                 "last_exit_code": self._last_exit_code,
                 "last_started_at": self._last_started_at,
                 "last_command": self._last_command,
+                "runtime": self._runtime,
             }
 
     def _run_once(self, command: list[str]) -> int:
         PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        reader: threading.Thread | None = None
         try:
-            self._current_process = subprocess.Popen(command)
+            self._current_process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+            reader = threading.Thread(
+                target=_log_process_output,
+                args=(self._current_process,),
+                name="ffmpeg-output",
+                daemon=True,
+            )
+            reader.start()
             PID_FILE.write_text(str(self._current_process.pid), encoding="utf-8")
             self._set_state(last_started_at=_utc_now(), last_exit_code=None)
             logging.info("FFmpeg started with pid %s", self._current_process.pid)
@@ -124,13 +147,15 @@ class CameraWallSupervisor:
             self._set_state(last_exit_code=127, last_error=f"FFmpeg binary not found: {command[0]}")
             return 127
         finally:
+            if reader:
+                reader.join(timeout=2)
             self._current_process = None
             try:
                 PID_FILE.unlink()
             except FileNotFoundError:
                 pass
 
-    def _terminate_process(self, process: subprocess.Popen[bytes]) -> None:
+    def _terminate_process(self, process: subprocess.Popen[str]) -> None:
         if process.poll() is not None:
             return
         process.terminate()
@@ -263,6 +288,7 @@ def _configure_logging() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
         stream=sys.stdout,
     )
+    install_log_buffer()
 
 
 def _install_signal_handlers(supervisor: CameraWallSupervisor) -> None:
@@ -287,3 +313,26 @@ def _env_bool(name: str, default: bool) -> bool:
 
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _runtime_summary(config: AppConfig) -> dict[str, object]:
+    output = config.output
+    ffmpeg = config.ffmpeg
+    return {
+        "output_url": output.url,
+        "resolution": f"{output.width}x{output.height}",
+        "fps": output.fps,
+        "bitrate": output.bitrate,
+        "encoder": output.encoder,
+        "input_hwaccel": ffmpeg.input_hwaccel,
+        "enabled_inputs": len(config.enabled_inputs),
+    }
+
+
+def _log_process_output(process: subprocess.Popen[str]) -> None:
+    if not process.stdout:
+        return
+    for raw_line in process.stdout:
+        line = raw_line.rstrip()
+        if line:
+            logging.warning("ffmpeg %s", mask_text(line))

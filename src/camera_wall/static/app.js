@@ -3,6 +3,8 @@ const state = {
   valid: false,
   dirty: false,
   busy: false,
+  status: null,
+  logs: [],
   toastTimer: null,
 };
 
@@ -13,6 +15,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("restartButton").addEventListener("click", restartPipeline);
   $("addCameraButton").addEventListener("click", addCamera);
   $("applyLayoutButton").addEventListener("click", () => applyLayout($("layoutSelect").value));
+  $("refreshLogsButton").addEventListener("click", loadLogs);
+  $("copyCommandButton").addEventListener("click", copyCommand);
+  $("downloadConfigButton").addEventListener("click", downloadConfig);
   loadConfig();
   refreshStatus();
   setInterval(refreshStatus, 3000);
@@ -69,8 +74,19 @@ async function refreshStatus() {
   try {
     const data = await requestJson("/api/status");
     updateStatus(data.status);
+    await loadLogs();
   } catch {
     updateFfmpegState("Status unavailable", "warn");
+  }
+}
+
+async function loadLogs() {
+  try {
+    const data = await requestJson("/api/logs?limit=240");
+    state.logs = data.logs || [];
+    renderLogs();
+  } catch (error) {
+    showToast(error.message, true);
   }
 }
 
@@ -94,6 +110,8 @@ function renderAll() {
   renderOutput();
   renderCameras();
   renderPreview();
+  renderStatus(state.status);
+  renderLogs();
 }
 
 function renderOutput() {
@@ -526,6 +544,7 @@ function updateConfigState(valid, error) {
 
 function updateStatus(status) {
   if (!status) return;
+  state.status = status;
   if (status.ffmpeg_running) {
     updateFfmpegState(`Running ${status.pid}`, "ok");
   } else if (status.last_error) {
@@ -535,6 +554,7 @@ function updateStatus(status) {
   } else {
     updateFfmpegState("Stopped", "warn");
   }
+  renderStatus(status);
 }
 
 function updateFfmpegState(text, className) {
@@ -547,6 +567,106 @@ function setBusy(value) {
   state.busy = value;
   $("saveButton").disabled = value;
   $("restartButton").disabled = value;
+  $("refreshLogsButton").disabled = value;
+}
+
+function renderStatus(status) {
+  const grid = $("statusGrid");
+  const command = $("commandBox");
+  grid.replaceChildren();
+  if (!status) {
+    command.textContent = "No command yet";
+    return;
+  }
+  const runtime = status.runtime || {};
+  const items = [
+    ["State", status.ffmpeg_running ? "running" : status.last_error ? "config error" : "stopped"],
+    ["PID", status.pid || "-"],
+    ["Restarts", status.restart_count ?? 0],
+    ["Exit", status.last_exit_code ?? "-"],
+    ["Started", status.last_started_at || "-"],
+    ["Encoder", runtime.encoder || "-"],
+    ["Input decode", runtime.input_hwaccel || "-"],
+    ["Output", runtime.output_url || "-"],
+    ["Canvas", runtime.resolution || "-"],
+    ["FPS", runtime.fps || "-"],
+    ["Bitrate", runtime.bitrate || "-"],
+    ["Inputs", runtime.enabled_inputs ?? "-"],
+  ];
+  if (status.restart_reason) items.push(["Restart reason", status.restart_reason]);
+  if (status.last_error) items.push(["Last error", status.last_error]);
+  items.forEach(([label, value]) => grid.append(statusCard(label, value)));
+  command.textContent = status.last_command || "No command yet";
+}
+
+function statusCard(label, value) {
+  const card = element("div", "status-card");
+  const title = document.createElement("span");
+  const text = document.createElement("strong");
+  title.textContent = label;
+  text.textContent = String(value);
+  card.append(title, text);
+  return card;
+}
+
+function renderLogs() {
+  const panel = $("logPanel");
+  if (!state.logs.length) {
+    panel.textContent = "No logs yet";
+    return;
+  }
+  panel.textContent = state.logs
+    .map((item) => `${item.time} ${item.level.padEnd(7)} ${item.message}`)
+    .join("\n");
+  panel.scrollTop = panel.scrollHeight;
+}
+
+async function copyCommand() {
+  const command = state.status?.last_command;
+  if (!command) {
+    showToast("No command yet", true);
+    return;
+  }
+  try {
+    await copyText(command);
+    showToast("Command copied");
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const ok = document.execCommand("copy");
+  textarea.remove();
+  if (!ok) throw new Error("Copy failed");
+}
+
+async function downloadConfig() {
+  try {
+    const response = await fetch("/api/config.yaml", { headers: { Accept: "application/x-yaml" } });
+    if (!response.ok) throw new Error(`Download failed with ${response.status}`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "camera-wall-config.yaml";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    showToast(error.message, true);
+  }
 }
 
 function showToast(message, bad = false) {

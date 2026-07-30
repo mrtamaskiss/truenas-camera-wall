@@ -9,10 +9,11 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-from .admin_config import load_admin_config, save_admin_config
+from .admin_config import dump_yaml, load_admin_config, save_admin_config
 from .config import ConfigError
+from .log_buffer import log_payload
 
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -67,8 +68,14 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/config":
             self._send_json(load_admin_config(self.server.config_path))
             return
+        if path == "/api/config.yaml":
+            self._send_config_download()
+            return
         if path == "/api/status":
             self._send_json({"status": self.server.supervisor.status_snapshot()})
+            return
+        if path == "/api/logs":
+            self._send_json(log_payload(_query_int(self.path, "limit", 200)))
             return
         if path in {"/", "/index.html"}:
             self._send_static("index.html", "text/html; charset=utf-8")
@@ -96,7 +103,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self._send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def log_message(self, fmt: str, *args: object) -> None:
-        logging.info("admin %s - %s", self.address_string(), fmt % args)
+        level = logging.DEBUG if self.path.startswith(("/api/status", "/api/logs")) else logging.INFO
+        logging.log(level, "admin %s - %s", self.address_string(), fmt % args)
 
     def _handle_save_config(self) -> None:
         try:
@@ -195,5 +203,28 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_config_download(self) -> None:
+        try:
+            body = self.server.config_path.read_bytes()
+        except FileNotFoundError:
+            body = dump_yaml(load_admin_config(self.server.config_path)["config"]).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Type", "application/x-yaml; charset=utf-8")
+        self.send_header("Content-Disposition", 'attachment; filename="camera-wall-config.yaml"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send_error(self, status: HTTPStatus, message: str) -> None:
         self._send_json({"ok": False, "error": message}, status)
+
+
+def _query_int(path: str, name: str, default: int) -> int:
+    values = parse_qs(urlparse(path).query).get(name)
+    if not values:
+        return default
+    try:
+        return int(values[0])
+    except ValueError:
+        return default

@@ -8,6 +8,7 @@ from .config import AppConfig, InputConfig
 
 
 _BITRATE_RE = re.compile(r"^(\d+)([kKmM]?)$")
+_URL_CREDENTIAL_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]*://)([^/\s:@]+):([^@\s/]+)@([^/\s]+)")
 
 
 def build_ffmpeg_command(config: AppConfig) -> list[str]:
@@ -97,6 +98,10 @@ def build_filter_graph(config: AppConfig) -> str:
 def masked_command(args: list[str]) -> str:
     masked = [mask_url(arg) for arg in args]
     return shlex.join(masked)
+
+
+def mask_text(value: str) -> str:
+    return _URL_CREDENTIAL_RE.sub(r"\1***:***@\4", value)
 
 
 def mask_url(value: str) -> str:

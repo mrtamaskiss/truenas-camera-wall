@@ -80,8 +80,11 @@ The admin UI can edit:
 - camera names, labels, enabled state, and cell positions
 - output URL, resolution, FPS, bitrate, encoder, input decode, VAAPI/QSV options
 - layout templates: auto, 3 wall, grid, focus
+- current status, recent logs, masked FFmpeg command, and config download
 
 Saving in the UI validates the full config, writes `/config/config.yaml`, and restarts only the supervised FFmpeg process. If your current config uses `${CAMERA_1_URL}` style environment variables, saving from the UI writes the resolved URL into the private config file.
+
+The Status panel shows the supervised FFmpeg process state, PID, restart count, encoder, input decode mode, output URL, the masked generated FFmpeg command, and an in-memory log tail. Set `CAMERA_WALL_LOG_BUFFER_LINES` to change the retained log line count.
 
 ## Encoder Selection
 
@@ -160,8 +163,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.3.0 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.3.0
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.4.0 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.4.0
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -202,7 +205,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.3.0
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.4.0
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host
@@ -213,6 +216,7 @@ services:
       CAMERA_WALL_WEB_PORT: "8088"
       CAMERA_WALL_ADMIN_USER: admin
       CAMERA_WALL_ADMIN_PASSWORD: change-this-password
+      CAMERA_WALL_LOG_BUFFER_LINES: "500"
       OUTPUT_URL: rtsp://192.168.64.10:8554/camera_wall
       CAMERA_WALL_BITRATE: 5M
       CAMERA_WALL_ENCODER: vaapi
