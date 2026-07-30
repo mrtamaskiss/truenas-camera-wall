@@ -4,17 +4,20 @@ from camera_wall.config import parse_config
 from camera_wall.ffmpeg import build_ffmpeg_command, build_filter_graph, masked_command
 
 
-def make_config(encoder: str = "software"):
+def make_config(encoder: str = "software", output_overrides: dict | None = None):
+    output = {
+        "url": "rtsp://192.168.64.10:8554/camera_wall",
+        "width": 1920,
+        "height": 1080,
+        "fps": 15,
+        "bitrate": "5M",
+        "encoder": encoder,
+    }
+    if output_overrides:
+        output.update(output_overrides)
     return parse_config(
         {
-            "output": {
-                "url": "rtsp://192.168.64.10:8554/camera_wall",
-                "width": 1920,
-                "height": 1080,
-                "fps": 15,
-                "bitrate": "5M",
-                "encoder": encoder,
-            },
+            "output": output,
             "inputs": [
                 {
                     "name": "camera-1",
@@ -110,7 +113,24 @@ class FfmpegTests(unittest.TestCase):
 
         self.assertIn("-vaapi_device", command)
         self.assertIn("h264_vaapi", command)
+        self.assertIn("-rc_mode", command)
+        self.assertEqual(command[command.index("-rc_mode") + 1], "CQP")
+        self.assertIn("-qp", command)
+        self.assertEqual(command[command.index("-qp") + 1], "23")
+        self.assertNotIn("-b:v", command)
+        self.assertNotIn("-maxrate", command)
+        self.assertNotIn("-bufsize", command)
         self.assertIn("[wall_raw]format=nv12,hwupload[wall]", graph)
+
+    def test_vaapi_cbr_encoder_args_keep_bitrate(self) -> None:
+        command = build_ffmpeg_command(make_config("vaapi", {"vaapi_rc_mode": "cbr"}))
+
+        self.assertIn("-rc_mode", command)
+        self.assertEqual(command[command.index("-rc_mode") + 1], "CBR")
+        self.assertIn("-b:v", command)
+        self.assertIn("-maxrate", command)
+        self.assertIn("-bufsize", command)
+        self.assertNotIn("-qp", command)
 
     def test_qsv_encoder_args(self) -> None:
         command = build_ffmpeg_command(make_config("qsv"))

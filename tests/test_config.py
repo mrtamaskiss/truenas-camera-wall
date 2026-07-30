@@ -96,6 +96,46 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.ffmpeg.input_timeout_seconds, 0)
 
+    def test_parses_vaapi_cqp_options(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "output": {
+                **BASE_CONFIG["output"],
+                "encoder": "vaapi",
+                "vaapi_rc_mode": "cqp",
+                "vaapi_qp": "${CAMERA_WALL_VAAPI_QP:-24}",
+            },
+        }
+        config = parse_config(
+            raw,
+            {
+                "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                "CAMERA_1_URL": "rtsp://camera/stream1",
+            },
+        )
+
+        self.assertEqual(config.output.vaapi_rc_mode, "cqp")
+        self.assertEqual(config.output.vaapi_qp, 24)
+
+    def test_rejects_invalid_vaapi_qp(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "output": {
+                **BASE_CONFIG["output"],
+                "encoder": "vaapi",
+                "vaapi_qp": 52,
+            },
+        }
+
+        with self.assertRaises(ConfigError):
+            parse_config(
+                raw,
+                {
+                    "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                    "CAMERA_1_URL": "rtsp://camera/stream1",
+                },
+            )
+
     def test_rejects_out_of_bounds_layout(self) -> None:
         raw = {
             **BASE_CONFIG,

@@ -71,6 +71,8 @@ Set `output.encoder` or `CAMERA_WALL_ENCODER` to one of:
 - `vaapi`: `h264_vaapi`, uses Intel VAAPI encode via `/dev/dri`.
 - `qsv`: `h264_qsv`, uses Intel Quick Sync via `/dev/dri`.
 
+VAAPI defaults to constant-quality CQP mode because some TrueNAS Intel drivers only report CQP support. Adjust `output.vaapi_qp` or `CAMERA_WALL_VAAPI_QP`; lower values improve quality and increase bitrate. If your driver supports bitrate control, set `output.vaapi_rc_mode` to `cbr`, `vbr`, or `auto`.
+
 For Intel hardware acceleration in Docker or TrueNAS, pass `/dev/dri` into the container. If hardware initialization fails, switch back to `software` first to confirm the camera URLs and go2rtc ingest are working.
 
 ## Credentials
@@ -115,8 +117,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.2 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.2
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.3 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.3
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -155,13 +157,14 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.2
+    image: ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.3
     restart: unless-stopped
     environment:
       CAMERA_WALL_CONFIG: /config/config.yaml
       OUTPUT_URL: rtsp://192.168.64.10:8554/camera_wall
       CAMERA_WALL_BITRATE: 5M
       CAMERA_WALL_ENCODER: software
+      CAMERA_WALL_VAAPI_QP: "23"
       CAMERA_1_URL: rtsp://USER:PASSWORD@192.168.64.21:554/stream1
       CAMERA_2_URL: rtsp://USER:PASSWORD@192.168.64.22:554/stream1
       CAMERA_3_URL: rtsp://USER:PASSWORD@192.168.64.23:554/stream1
@@ -196,6 +199,7 @@ ffplay rtsp://192.168.64.10:8554/camera_wall
 - Browser compatibility is simplest with H.264 video. This app encodes `yuv420p` for software mode and `nv12` for hardware encoders.
 - RTSP input is forced to TCP by default for camera stability.
 - FFmpeg reconnect options are strongest for HTTP inputs. For RTSP, the supervisor restarts the whole pipeline after FFmpeg exits. `ffmpeg.input_timeout_seconds` is disabled by default because some FFmpeg builds reject `-rw_timeout`.
+- VAAPI uses CQP by default for broad Intel driver compatibility. In this mode `output.bitrate` is only a soft configuration value for non-VAAPI encoders; use `output.vaapi_qp` to tune VAAPI quality.
 - Hardware acceleration depends on the host kernel, `/dev/dri`, driver support, and the FFmpeg build. Use `software` as the baseline.
 
 ## References

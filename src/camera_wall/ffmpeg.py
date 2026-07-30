@@ -121,13 +121,15 @@ def _encoder_args(config: AppConfig) -> list[str]:
     output = config.output
     gop = str(output.fps * 2)
     buffer_size = _double_bitrate(output.bitrate)
-    common = [
+    bitrate_args = [
         "-b:v",
         output.bitrate,
         "-maxrate",
         output.bitrate,
         "-bufsize",
         buffer_size,
+    ]
+    gop_args = [
         "-g",
         gop,
         "-keyint_min",
@@ -146,13 +148,21 @@ def _encoder_args(config: AppConfig) -> list[str]:
             "high",
             "-pix_fmt",
             "yuv420p",
-            *common,
+            *bitrate_args,
+            *gop_args,
             "-sc_threshold",
             "0",
         ]
     if output.encoder == "vaapi":
-        return ["-c:v", "h264_vaapi", "-profile:v", "high", *common]
-    return ["-c:v", "h264_qsv", "-preset", "veryfast", *common, "-look_ahead", "0"]
+        args = ["-c:v", "h264_vaapi", "-profile:v", "high"]
+        if output.vaapi_rc_mode == "cqp":
+            args.extend(["-rc_mode", "CQP", "-qp", str(output.vaapi_qp)])
+        elif output.vaapi_rc_mode != "auto":
+            args.extend(["-rc_mode", output.vaapi_rc_mode.upper(), *bitrate_args])
+        else:
+            args.extend(bitrate_args)
+        return [*args, *gop_args]
+    return ["-c:v", "h264_qsv", "-preset", "veryfast", *bitrate_args, *gop_args, "-look_ahead", "0"]
 
 
 def _double_bitrate(value: str) -> str:

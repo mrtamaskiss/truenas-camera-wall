@@ -8,6 +8,8 @@ output:
   encoder: ${CAMERA_WALL_ENCODER:-software}
   rtsp_transport: tcp
   vaapi_device: /dev/dri/renderD128
+  vaapi_rc_mode: cqp
+  vaapi_qp: ${CAMERA_WALL_VAAPI_QP:-23}
   qsv_device: /dev/dri/renderD128
 
 ffmpeg:

@@ -41,6 +41,8 @@ class OutputConfig:
     encoder: str = "software"
     rtsp_transport: str = "tcp"
     vaapi_device: str = "/dev/dri/renderD128"
+    vaapi_rc_mode: str = "cqp"
+    vaapi_qp: int = 23
     qsv_device: str = "/dev/dri/renderD128"
 
 
@@ -101,6 +103,13 @@ def parse_config(raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -
         ),
         vaapi_device=_resolved_string(
             output_raw.get("vaapi_device", "/dev/dri/renderD128"), "output.vaapi_device", env
+        ),
+        vaapi_rc_mode=_vaapi_rc_mode(
+            _resolved_string(output_raw.get("vaapi_rc_mode", "cqp"), "output.vaapi_rc_mode", env)
+        ),
+        vaapi_qp=_qp_int(
+            _resolved_maybe_int(output_raw.get("vaapi_qp", 23), "output.vaapi_qp", env),
+            "output.vaapi_qp",
         ),
         qsv_device=_resolved_string(
             output_raw.get("qsv_device", "/dev/dri/renderD128"), "output.qsv_device", env
@@ -231,6 +240,15 @@ def _resolved_string(value: Any, name: str, env: Mapping[str, str]) -> str:
     return resolve_text(_string(value, name), env)
 
 
+def _resolved_maybe_int(value: Any, name: str, env: Mapping[str, str]) -> Any:
+    if isinstance(value, str):
+        resolved = resolve_text(value, env)
+        if re.fullmatch(r"\d+", resolved):
+            return int(resolved)
+        return resolved
+    return value
+
+
 def _mapping(value: Any, name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ConfigError(f"{name} must be a mapping")
@@ -267,11 +285,24 @@ def _nonnegative_int(value: Any, name: str) -> int:
     return value
 
 
+def _qp_int(value: Any, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 51:
+        raise ConfigError(f"{name} must be an integer between 0 and 51")
+    return value
+
+
 def _encoder(value: Any) -> str:
     encoder = _string(value, "output.encoder").lower()
     if encoder not in {"software", "vaapi", "qsv"}:
         raise ConfigError("output.encoder must be one of: software, vaapi, qsv")
     return encoder
+
+
+def _vaapi_rc_mode(value: Any) -> str:
+    rc_mode = _string(value, "output.vaapi_rc_mode").lower()
+    if rc_mode not in {"cqp", "cbr", "vbr", "auto"}:
+        raise ConfigError("output.vaapi_rc_mode must be one of: cqp, cbr, vbr, auto")
+    return rc_mode
 
 
 def _transport(value: Any, name: str) -> str:
