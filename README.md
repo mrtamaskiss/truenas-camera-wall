@@ -2,13 +2,14 @@
 
 Dockerized FFmpeg camera wall for TrueNAS SCALE custom apps.
 
-It reads multiple RTSP or HTTP camera inputs, renders them into one H.264 wall stream, and publishes that stream to an existing go2rtc RTSP ingest endpoint. The first version is intentionally small: no recording, no web UI, one FFmpeg pipeline supervised by a restart loop.
+It reads multiple RTSP or HTTP camera inputs, renders them into one H.264 wall stream, and publishes that stream to an existing go2rtc RTSP ingest endpoint. It includes a small password-protected admin UI for editing cameras, output settings, and layout without SSH.
 
 ## Architecture
 
 - `camera_wall.config` loads YAML, resolves environment variables and Docker secrets, and validates the wall layout.
 - `camera_wall.ffmpeg` builds one FFmpeg command with a generated `filter_complex` graph.
-- `camera_wall.supervisor` starts FFmpeg, logs a credential-masked command, and restarts the pipeline when FFmpeg exits.
+- `camera_wall.supervisor` starts FFmpeg, logs a credential-masked command, and restarts the pipeline when FFmpeg exits or the admin UI applies a new config.
+- `camera_wall.web` serves the admin UI and writes the private YAML config mounted at `/config/config.yaml`.
 - Docker healthcheck reports healthy only while the supervised FFmpeg process is alive.
 
 The wall uses a black 1920x1080 canvas by default. Each enabled input is scaled with `force_original_aspect_ratio=decrease`, padded to its configured cell, and overlaid at its configured position. Inputs are never stretched unless `preserve_aspect: false` is explicitly set.
@@ -63,6 +64,25 @@ cp config.example.yaml config.yaml
 docker compose up --build
 ```
 
+4. Open the admin UI:
+
+```text
+http://localhost:8088
+```
+
+Use `CAMERA_WALL_ADMIN_USER` and `CAMERA_WALL_ADMIN_PASSWORD` from `.env`.
+
+## Admin UI
+
+The admin UI can edit:
+
+- RTSP or HTTP camera URLs
+- camera names, labels, enabled state, and cell positions
+- output URL, resolution, FPS, bitrate, encoder, VAAPI/QSV options
+- layout templates: auto, 3 wall, grid, focus
+
+Saving in the UI validates the full config, writes `/config/config.yaml`, and restarts only the supervised FFmpeg process. If your current config uses `${CAMERA_1_URL}` style environment variables, saving from the UI writes the resolved URL into the private config file.
+
 ## Encoder Selection
 
 Set `output.encoder` or `CAMERA_WALL_ENCODER` to one of:
@@ -78,6 +98,14 @@ For Intel hardware acceleration in Docker or TrueNAS, pass `/dev/dri` into the c
 ## Credentials
 
 Never put real passwords in `config.example.yaml` or commit them to git.
+
+The admin UI stores camera URLs in the mounted private config file, typically:
+
+```text
+/mnt/tank/apps/camera-wall/config.yaml
+```
+
+Protect that dataset and do not expose the admin UI outside your LAN. The UI requires HTTP Basic Auth via `CAMERA_WALL_ADMIN_USER` and `CAMERA_WALL_ADMIN_PASSWORD`.
 
 Use environment variables:
 
@@ -117,8 +145,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.3 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.3
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.2.0 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.2.0
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -127,11 +155,13 @@ docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.3
 /mnt/tank/apps/camera-wall
 ```
 
-3. Save your private config as:
+3. Optionally seed your private config as:
 
 ```text
 /mnt/tank/apps/camera-wall/config.yaml
 ```
+
+If the file is missing, the container stays up and lets you create it from the admin UI.
 
 4. In go2rtc, create the empty ingest stream:
 
@@ -152,42 +182,51 @@ streams:
 camera-wall
 ```
 
-9. Paste this Compose YAML, replacing image, config path, and URLs:
+9. Paste this Compose YAML, replacing the admin password and URLs:
 
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.1.3
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.2.0
+    container_name: camera-wall
     restart: unless-stopped
+    network_mode: host
     environment:
       CAMERA_WALL_CONFIG: /config/config.yaml
+      CAMERA_WALL_WEB_ENABLED: "true"
+      CAMERA_WALL_WEB_HOST: 0.0.0.0
+      CAMERA_WALL_WEB_PORT: "8088"
+      CAMERA_WALL_ADMIN_USER: admin
+      CAMERA_WALL_ADMIN_PASSWORD: change-this-password
       OUTPUT_URL: rtsp://192.168.64.10:8554/camera_wall
       CAMERA_WALL_BITRATE: 5M
-      CAMERA_WALL_ENCODER: software
+      CAMERA_WALL_ENCODER: vaapi
       CAMERA_WALL_VAAPI_QP: "23"
-      CAMERA_1_URL: rtsp://USER:PASSWORD@192.168.64.21:554/stream1
-      CAMERA_2_URL: rtsp://USER:PASSWORD@192.168.64.22:554/stream1
-      CAMERA_3_URL: rtsp://USER:PASSWORD@192.168.64.23:554/stream1
-    volumes:
-      - /mnt/tank/apps/camera-wall/config.yaml:/config/config.yaml:ro
-```
-
-For Intel VAAPI/QSV, add `devices` beside `volumes` and change the existing `CAMERA_WALL_ENCODER` value:
-
-```yaml
+      CAMERA_1_URL: rtsp://192.168.64.10:8554/cam_a40ca720_1
+      CAMERA_2_URL: rtsp://192.168.64.10:8554/cam_a70cabd8_1
+      CAMERA_3_URL: rtsp://192.168.64.10:8554/cam_a60caa40_1
+      LIBVA_DRIVER_NAME: iHD
     devices:
       - /dev/dri:/dev/dri
+    volumes:
+      - /mnt/tank/apps/camera-wall:/config
 ```
 
 Use `CAMERA_WALL_ENCODER: vaapi` or `CAMERA_WALL_ENCODER: qsv` in the environment block.
 
-If you use the guided Custom App wizard instead of YAML, set the same image, environment variables, read-only config mount, restart policy, and GPU passthrough. TrueNAS shows non-NVIDIA GPU passthrough under the app resource settings when hardware is detected.
+If you use the guided Custom App wizard instead of YAML, set the same image, environment variables, writable config mount, restart policy, host networking or equivalent port access, and GPU passthrough. TrueNAS shows non-NVIDIA GPU passthrough under the app resource settings when hardware is detected.
 
 10. Click `Save`.
 
-11. Check logs. A healthy startup logs a masked FFmpeg command and `FFmpeg started with pid ...`.
+11. Open the admin UI:
 
-12. Test from another machine:
+```text
+http://TRUENAS-IP:8088
+```
+
+12. Check logs. A healthy startup logs a masked FFmpeg command and `FFmpeg started with pid ...`.
+
+13. Test from another machine:
 
 ```sh
 ffplay rtsp://192.168.64.10:8554/camera_wall

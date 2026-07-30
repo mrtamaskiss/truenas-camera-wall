@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Camera Wall Admin</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <h1>Camera Wall</h1>
+        <span id="configState" class="state-pill">Loading</span>
+      </div>
+      <div class="actions">
+        <span id="ffmpegState" class="state-pill">FFmpeg</span>
+        <button id="restartButton" type="button" class="secondary">Restart</button>
+        <button id="saveButton" type="button">Save &amp; Apply</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="output-section">
+        <div class="section-heading">
+          <h2>Output</h2>
+        </div>
+        <div id="outputForm" class="form-grid"></div>
+      </section>
+
+      <section class="layout-section">
+        <div class="section-heading">
+          <h2>Layout</h2>
+          <div class="layout-tools">
+            <select id="layoutSelect" aria-label="Layout template">
+              <option value="auto">Auto</option>
+              <option value="three">3 wall</option>
+              <option value="grid">Grid</option>
+              <option value="focus">Focus</option>
+            </select>
+            <button id="applyLayoutButton" type="button" class="secondary">Apply Layout</button>
+          </div>
+        </div>
+        <div class="preview-wrap">
+          <div id="preview" class="preview" aria-label="Layout preview"></div>
+        </div>
+      </section>
+
+      <section class="camera-section">
+        <div class="section-heading">
+          <h2>Cameras</h2>
+          <button id="addCameraButton" type="button" class="secondary">Add Camera</button>
+        </div>
+        <div id="cameraList" class="camera-list"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

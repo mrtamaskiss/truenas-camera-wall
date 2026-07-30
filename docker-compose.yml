@@ -9,10 +9,16 @@ services:
       CAMERA_WALL_BITRATE: ${CAMERA_WALL_BITRATE:-5M}
       CAMERA_WALL_ENCODER: ${CAMERA_WALL_ENCODER:-software}
       CAMERA_WALL_VAAPI_QP: ${CAMERA_WALL_VAAPI_QP:-23}
+      CAMERA_WALL_WEB_ENABLED: ${CAMERA_WALL_WEB_ENABLED:-true}
+      CAMERA_WALL_WEB_PORT: ${CAMERA_WALL_WEB_PORT:-8088}
+      CAMERA_WALL_ADMIN_USER: ${CAMERA_WALL_ADMIN_USER:-admin}
+      CAMERA_WALL_ADMIN_PASSWORD: ${CAMERA_WALL_ADMIN_PASSWORD}
       CAMERA_1_URL: ${CAMERA_1_URL}
       CAMERA_2_URL: ${CAMERA_2_URL}
       CAMERA_3_URL: ${CAMERA_3_URL}
     volumes:
-      - ./config.yaml:/config/config.yaml:ro
+      - ./config.yaml:/config/config.yaml
+    ports:
+      - "${CAMERA_WALL_WEB_PORT:-8088}:${CAMERA_WALL_WEB_PORT:-8088}"
     devices:
       - /dev/dri:/dev/dri

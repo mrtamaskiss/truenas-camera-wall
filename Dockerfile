@@ -20,6 +20,8 @@ ENV CAMERA_WALL_CONFIG=/config/config.yaml \
     PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1
 
+EXPOSE 8088
+
 ENTRYPOINT ["/usr/bin/tini", "--", "python3", "-m", "camera_wall"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

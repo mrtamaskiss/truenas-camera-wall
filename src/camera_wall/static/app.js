@@ -1,0 +1,545 @@
+const state = {
+  config: null,
+  valid: false,
+  dirty: false,
+  busy: false,
+  toastTimer: null,
+};
+
+const $ = (id) => document.getElementById(id);
+
+document.addEventListener("DOMContentLoaded", () => {
+  $("saveButton").addEventListener("click", saveConfig);
+  $("restartButton").addEventListener("click", restartPipeline);
+  $("addCameraButton").addEventListener("click", addCamera);
+  $("applyLayoutButton").addEventListener("click", () => applyLayout($("layoutSelect").value));
+  loadConfig();
+  refreshStatus();
+  setInterval(refreshStatus, 3000);
+});
+
+async function loadConfig() {
+  try {
+    const data = await requestJson("/api/config");
+    state.config = data.config;
+    state.valid = Boolean(data.valid);
+    renderAll();
+    updateConfigState(data.valid, data.error);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function saveConfig() {
+  if (!state.config || state.busy) return;
+  setBusy(true);
+  try {
+    const data = await requestJson("/api/config", {
+      method: "POST",
+      body: JSON.stringify({ config: state.config }),
+    });
+    state.config = data.config;
+    state.dirty = false;
+    renderAll();
+    updateConfigState(true, null);
+    updateStatus(data.status);
+    showToast("Saved and applied");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function restartPipeline() {
+  if (state.busy) return;
+  setBusy(true);
+  try {
+    const data = await requestJson("/api/restart", { method: "POST" });
+    updateStatus(data.status);
+    showToast("Restart requested");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function refreshStatus() {
+  try {
+    const data = await requestJson("/api/status");
+    updateStatus(data.status);
+  } catch {
+    updateFfmpegState("Status unavailable", "warn");
+  }
+}
+
+async function requestJson(path, options = {}) {
+  const headers = { Accept: "application/json", ...(options.headers || {}) };
+  if (options.body) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, { ...options, headers });
+  let payload = {};
+  try {
+    payload = await response.json();
+  } catch {
+    payload = {};
+  }
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || `Request failed with ${response.status}`);
+  }
+  return payload;
+}
+
+function renderAll() {
+  renderOutput();
+  renderCameras();
+  renderPreview();
+}
+
+function renderOutput() {
+  const form = $("outputForm");
+  form.replaceChildren();
+  const output = ensureOutput();
+  const ffmpeg = ensureFfmpeg();
+
+  form.append(
+    textField("RTSP output", output.url, (value) => setOutput("url", value), true),
+    numberField("Width", output.width, (value) => setOutput("width", value)),
+    numberField("Height", output.height, (value) => setOutput("height", value)),
+    numberField("FPS", output.fps, (value) => setOutput("fps", value)),
+    textField("Bitrate", output.bitrate, (value) => setOutput("bitrate", value)),
+    selectField(
+      "Encoder",
+      output.encoder,
+      [
+        ["software", "software"],
+        ["vaapi", "vaapi"],
+        ["qsv", "qsv"],
+      ],
+      (value) => setOutput("encoder", value)
+    ),
+    selectField(
+      "VAAPI RC",
+      output.vaapi_rc_mode,
+      [
+        ["cqp", "cqp"],
+        ["cbr", "cbr"],
+        ["vbr", "vbr"],
+        ["auto", "auto"],
+      ],
+      (value) => setOutput("vaapi_rc_mode", value)
+    ),
+    numberField("VAAPI QP", output.vaapi_qp, (value) => setOutput("vaapi_qp", value)),
+    textField("VAAPI device", output.vaapi_device, (value) => setOutput("vaapi_device", value), true),
+    textField("QSV device", output.qsv_device, (value) => setOutput("qsv_device", value), true),
+    selectField(
+      "Input RTSP",
+      ffmpeg.input_rtsp_transport,
+      [
+        ["tcp", "tcp"],
+        ["udp", "udp"],
+      ],
+      (value) => setFfmpeg("input_rtsp_transport", value)
+    ),
+    selectField(
+      "Log level",
+      ffmpeg.log_level,
+      [
+        ["error", "error"],
+        ["warning", "warning"],
+        ["info", "info"],
+        ["debug", "debug"],
+      ],
+      (value) => setFfmpeg("log_level", value)
+    ),
+    numberField("Input timeout", ffmpeg.input_timeout_seconds, (value) =>
+      setFfmpeg("input_timeout_seconds", value)
+    ),
+    numberField("Restart delay", ffmpeg.restart_delay_seconds, (value) =>
+      setFfmpeg("restart_delay_seconds", value)
+    )
+  );
+}
+
+function renderCameras() {
+  const list = $("cameraList");
+  list.replaceChildren();
+  const inputs = ensureInputs();
+  inputs.forEach((camera, index) => list.append(cameraCard(camera, index)));
+}
+
+function cameraCard(camera, index) {
+  const card = element("article", "camera-card");
+  const head = element("div", "camera-head");
+  const headLeft = element("div", "camera-head-left");
+  const enabled = checkbox(camera.enabled, (value) => setCamera(index, "enabled", value));
+  const title = element("h3");
+  title.textContent = camera.name || `camera-${index + 1}`;
+  headLeft.append(enabled, title);
+
+  const remove = button("Remove", "danger", () => removeCamera(index));
+  head.append(headLeft, remove);
+
+  const grid = element("div", "camera-grid");
+  const name = textField("Name", camera.name, (value) => {
+    setCamera(index, "name", value);
+    title.textContent = value || `camera-${index + 1}`;
+  });
+  const label = textField("Label", camera.label, (value) => setCamera(index, "label", value));
+  const url = secretField("RTSP/HTTP URL", camera.url, (value) => setCamera(index, "url", value), true);
+  const showLabel = checkField("Show label", camera.show_label, (value) =>
+    setCamera(index, "show_label", value)
+  );
+  const preserve = checkField("Preserve aspect", camera.preserve_aspect, (value) =>
+    setCamera(index, "preserve_aspect", value)
+  );
+  const padColor = textField("Pad color", camera.pad_color, (value) => setCamera(index, "pad_color", value));
+  const x = numberField("X", camera.x, (value) => setCamera(index, "x", value));
+  const y = numberField("Y", camera.y, (value) => setCamera(index, "y", value));
+  const width = numberField("Width", camera.width, (value) => setCamera(index, "width", value));
+  const height = numberField("Height", camera.height, (value) => setCamera(index, "height", value));
+
+  grid.append(name, label, url, showLabel, preserve, padColor, x, y, width, height);
+  card.append(head, grid);
+  return card;
+}
+
+function renderPreview() {
+  const preview = $("preview");
+  preview.replaceChildren();
+  if (!state.config) return;
+  const output = ensureOutput();
+  const width = Math.max(1, Number(output.width) || 1);
+  const height = Math.max(1, Number(output.height) || 1);
+
+  ensureInputs().forEach((camera) => {
+    const cell = element("div", `preview-cell${camera.enabled ? "" : " disabled"}`);
+    cell.style.left = `${clampPercent(camera.x, width)}%`;
+    cell.style.top = `${clampPercent(camera.y, height)}%`;
+    cell.style.width = `${clampPercent(camera.width, width)}%`;
+    cell.style.height = `${clampPercent(camera.height, height)}%`;
+    const label = element("span");
+    label.textContent = camera.label || camera.name || "Camera";
+    cell.append(label);
+    preview.append(cell);
+  });
+}
+
+function applyLayout(mode) {
+  if (!state.config) return;
+  const indexes = enabledIndexes();
+  if (!indexes.length) {
+    showToast("Enable at least one camera", true);
+    return;
+  }
+  if (mode === "three") {
+    if (indexes.length !== 3) {
+      showToast("3 wall needs exactly 3 enabled cameras", true);
+      return;
+    }
+    assignCells(indexes, threeCells());
+  } else if (mode === "focus") {
+    assignCells(indexes, focusCells(indexes.length));
+  } else if (mode === "grid") {
+    assignCells(indexes, gridCells(indexes.length));
+  } else {
+    assignCells(indexes, autoCells(indexes.length));
+  }
+  markDirty();
+  renderCameras();
+  renderPreview();
+}
+
+function autoCells(count) {
+  if (count === 1) return [{ x: 0, y: 0, width: outputWidth(), height: outputHeight() }];
+  if (count === 2) {
+    const half = Math.floor(outputWidth() / 2);
+    return [
+      { x: 0, y: 0, width: half, height: outputHeight() },
+      { x: half, y: 0, width: outputWidth() - half, height: outputHeight() },
+    ];
+  }
+  if (count === 3) return threeCells();
+  return gridCells(count);
+}
+
+function threeCells() {
+  const width = outputWidth();
+  const height = outputHeight();
+  const halfW = Math.floor(width / 2);
+  const halfH = Math.floor(height / 2);
+  return [
+    { x: 0, y: 0, width: halfW, height: halfH },
+    { x: halfW, y: 0, width: width - halfW, height: halfH },
+    { x: 0, y: halfH, width, height: height - halfH },
+  ];
+}
+
+function gridCells(count) {
+  const width = outputWidth();
+  const height = outputHeight();
+  const cols = Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / cols);
+  const cellW = Math.floor(width / cols);
+  const cellH = Math.floor(height / rows);
+  return Array.from({ length: count }, (_, index) => {
+    const col = index % cols;
+    const row = Math.floor(index / cols);
+    const x = col * cellW;
+    const y = row * cellH;
+    return {
+      x,
+      y,
+      width: col === cols - 1 ? width - x : cellW,
+      height: row === rows - 1 ? height - y : cellH,
+    };
+  });
+}
+
+function focusCells(count) {
+  if (count < 2) return autoCells(count);
+  const width = outputWidth();
+  const height = outputHeight();
+  const mainW = Math.floor(width * 0.66);
+  const sideW = width - mainW;
+  const sideCount = count - 1;
+  const sideH = Math.floor(height / sideCount);
+  const cells = [{ x: 0, y: 0, width: mainW, height }];
+  for (let index = 0; index < sideCount; index += 1) {
+    const y = index * sideH;
+    cells.push({
+      x: mainW,
+      y,
+      width: sideW,
+      height: index === sideCount - 1 ? height - y : sideH,
+    });
+  }
+  return cells;
+}
+
+function assignCells(indexes, cells) {
+  indexes.forEach((cameraIndex, cellIndex) => {
+    Object.assign(state.config.inputs[cameraIndex], cells[cellIndex]);
+  });
+}
+
+function addCamera() {
+  if (!state.config) return;
+  const next = ensureInputs().length + 1;
+  state.config.inputs.push({
+    name: `camera-${next}`,
+    enabled: true,
+    url: "",
+    label: `Camera ${next}`,
+    show_label: true,
+    x: 0,
+    y: 0,
+    width: outputWidth(),
+    height: outputHeight(),
+    preserve_aspect: true,
+    pad_color: "black",
+  });
+  applyLayout("auto");
+}
+
+function removeCamera(index) {
+  state.config.inputs.splice(index, 1);
+  markDirty();
+  renderCameras();
+  renderPreview();
+}
+
+function setOutput(key, value) {
+  ensureOutput()[key] = value;
+  markDirty();
+  if (["width", "height"].includes(key)) renderPreview();
+}
+
+function setFfmpeg(key, value) {
+  ensureFfmpeg()[key] = value;
+  markDirty();
+}
+
+function setCamera(index, key, value) {
+  state.config.inputs[index][key] = value;
+  markDirty();
+  renderPreview();
+}
+
+function ensureOutput() {
+  state.config.output ||= {};
+  return state.config.output;
+}
+
+function ensureFfmpeg() {
+  state.config.ffmpeg ||= {};
+  return state.config.ffmpeg;
+}
+
+function ensureInputs() {
+  state.config.inputs ||= [];
+  return state.config.inputs;
+}
+
+function enabledIndexes() {
+  return ensureInputs()
+    .map((camera, index) => (camera.enabled ? index : null))
+    .filter((index) => index !== null);
+}
+
+function outputWidth() {
+  return Math.max(1, Number(ensureOutput().width) || 1920);
+}
+
+function outputHeight() {
+  return Math.max(1, Number(ensureOutput().height) || 1080);
+}
+
+function textField(labelText, value, onInput, wide = false) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = value ?? "";
+  input.addEventListener("input", () => onInput(input.value));
+  return field(labelText, input, wide);
+}
+
+function secretField(labelText, value, onInput, wide = false) {
+  const wrap = element("div", "url-row");
+  const input = document.createElement("input");
+  input.type = "password";
+  input.value = value ?? "";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.addEventListener("input", () => onInput(input.value));
+  const toggle = button("Show", "secondary", () => {
+    input.type = input.type === "password" ? "text" : "password";
+    toggle.textContent = input.type === "password" ? "Show" : "Hide";
+  });
+  wrap.append(input, toggle);
+  return field(labelText, wrap, wide);
+}
+
+function numberField(labelText, value, onInput) {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "0";
+  input.step = "1";
+  input.value = value ?? 0;
+  input.addEventListener("input", () => onInput(Number(input.value)));
+  return field(labelText, input);
+}
+
+function selectField(labelText, value, options, onInput) {
+  const select = document.createElement("select");
+  options.forEach(([optionValue, text]) => {
+    const option = document.createElement("option");
+    option.value = optionValue;
+    option.textContent = text;
+    select.append(option);
+  });
+  select.value = value;
+  select.addEventListener("change", () => onInput(select.value));
+  return field(labelText, select);
+}
+
+function checkField(labelText, value, onInput) {
+  const row = element("label", "check-row");
+  const input = checkbox(value, onInput);
+  const text = document.createElement("span");
+  text.textContent = labelText;
+  row.append(input, text);
+  return row;
+}
+
+function checkbox(value, onInput) {
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = Boolean(value);
+  input.addEventListener("change", () => onInput(input.checked));
+  return input;
+}
+
+function field(labelText, control, wide = false) {
+  const label = element("label", wide ? "wide" : "");
+  const text = document.createElement("span");
+  text.textContent = labelText;
+  label.append(text, control);
+  return label;
+}
+
+function button(text, className, onClick) {
+  const item = document.createElement("button");
+  item.type = "button";
+  item.textContent = text;
+  if (className) item.className = className;
+  item.addEventListener("click", onClick);
+  return item;
+}
+
+function element(tag, className = "") {
+  const item = document.createElement(tag);
+  if (className) item.className = className;
+  return item;
+}
+
+function clampPercent(value, total) {
+  return Math.max(0, Math.min(100, (Number(value || 0) / total) * 100));
+}
+
+function markDirty() {
+  state.dirty = true;
+  updateConfigState(state.valid, null);
+}
+
+function updateConfigState(valid, error) {
+  const pill = $("configState");
+  pill.className = "state-pill";
+  if (state.dirty) {
+    pill.textContent = "Unsaved";
+    pill.classList.add("warn");
+    return;
+  }
+  if (valid) {
+    pill.textContent = "Saved";
+    pill.classList.add("ok");
+  } else {
+    pill.textContent = "Config error";
+    pill.classList.add("bad");
+    if (error) showToast(error, true);
+  }
+}
+
+function updateStatus(status) {
+  if (!status) return;
+  if (status.ffmpeg_running) {
+    updateFfmpegState(`Running ${status.pid}`, "ok");
+  } else if (status.last_error) {
+    updateFfmpegState("Config error", "bad");
+  } else if (status.restart_requested) {
+    updateFfmpegState("Restarting", "warn");
+  } else {
+    updateFfmpegState("Stopped", "warn");
+  }
+}
+
+function updateFfmpegState(text, className) {
+  const pill = $("ffmpegState");
+  pill.textContent = text;
+  pill.className = `state-pill ${className}`;
+}
+
+function setBusy(value) {
+  state.busy = value;
+  $("saveButton").disabled = value;
+  $("restartButton").disabled = value;
+}
+
+function showToast(message, bad = false) {
+  const toast = $("toast");
+  toast.textContent = message;
+  toast.className = `toast visible${bad ? " bad" : ""}`;
+  clearTimeout(state.toastTimer);
+  state.toastTimer = setTimeout(() => {
+    toast.className = "toast";
+  }, bad ? 6000 : 2600);
+}

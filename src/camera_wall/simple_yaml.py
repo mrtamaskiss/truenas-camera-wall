@@ -37,7 +37,7 @@ def _preprocess(text: str) -> list[tuple[int, str]]:
 
 
 def _parse_block(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
-    if lines[index][1].startswith("- "):
+    if _is_list_item(lines[index][1]):
         return _parse_list(lines, index, indent)
     return _parse_dict(lines, index, indent)
 
@@ -50,7 +50,7 @@ def _parse_dict(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[
             break
         if current_indent > indent:
             raise ConfigError(f"Unexpected indentation near: {text}")
-        if text.startswith("- "):
+        if _is_list_item(text):
             break
         key, value = _split_key_value(text)
         if value == "":
@@ -73,10 +73,10 @@ def _parse_list(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[
             break
         if current_indent > indent:
             raise ConfigError(f"Unexpected indentation near: {text}")
-        if not text.startswith("- "):
+        if not _is_list_item(text):
             break
 
-        item_text = text[2:].strip()
+        item_text = text[1:].strip()
         if item_text == "":
             value, index = _parse_block(lines, index + 1, current_indent + 2)
             result.append(value)
@@ -120,3 +120,7 @@ def _parse_scalar(value: str) -> Any:
     if len(value) >= 2 and value[0] == value[-1] == "'":
         return value[1:-1].replace("''", "'")
     return value
+
+
+def _is_list_item(text: str) -> bool:
+    return text == "-" or text.startswith("- ")
