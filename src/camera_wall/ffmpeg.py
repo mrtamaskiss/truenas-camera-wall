@@ -31,6 +31,17 @@ def build_ffmpeg_command(config: AppConfig) -> list[str]:
     timeout_us = str(ffmpeg.input_timeout_seconds * 1_000_000)
     for input_cfg in inputs:
         args.extend(["-thread_queue_size", "512", "-fflags", "+genpts"])
+        if ffmpeg.input_hwaccel == "vaapi":
+            args.extend(
+                [
+                    "-hwaccel",
+                    "vaapi",
+                    "-hwaccel_device",
+                    ffmpeg.hwaccel_device,
+                    "-hwaccel_output_format",
+                    "vaapi",
+                ]
+            )
         if _is_rtsp_url(input_cfg.url):
             args.extend(["-rtsp_transport", ffmpeg.input_rtsp_transport])
         if _is_http_url(input_cfg.url):
@@ -61,7 +72,7 @@ def build_filter_graph(config: AppConfig) -> str:
     parts = [f"color=c=black:s={output.width}x{output.height}:r={output.fps},format=yuv420p[base]"]
 
     for index, input_cfg in enumerate(config.enabled_inputs):
-        parts.append(_input_filter(index, input_cfg, output.fps))
+        parts.append(_input_filter(index, input_cfg, output.fps, config.ffmpeg.input_hwaccel))
 
     last_label = "base"
     enabled_inputs = config.enabled_inputs
@@ -96,16 +107,21 @@ def mask_url(value: str) -> str:
     return urlunsplit((parsed.scheme, f"***:***@{host}", parsed.path, parsed.query, parsed.fragment))
 
 
-def _input_filter(index: int, input_cfg: InputConfig, fps: int) -> str:
+def _input_filter(index: int, input_cfg: InputConfig, fps: int, input_hwaccel: str) -> str:
+    source = f"[{index}:v]"
+    prefix = "hwdownload,format=nv12," if input_hwaccel == "vaapi" else ""
     if input_cfg.preserve_aspect:
         chain = (
-            f"[{index}:v]fps={fps},"
+            f"{source}{prefix}fps={fps},"
             f"scale=w={input_cfg.width}:h={input_cfg.height}:force_original_aspect_ratio=decrease,"
             f"pad=w={input_cfg.width}:h={input_cfg.height}:x=(ow-iw)/2:y=(oh-ih)/2:"
             f"color={_escape_filter_value(input_cfg.pad_color)},setsar=1"
         )
     else:
-        chain = f"[{index}:v]fps={fps},scale=w={input_cfg.width}:h={input_cfg.height},setsar=1"
+        chain = (
+            f"{source}{prefix}fps={fps},"
+            f"scale=w={input_cfg.width}:h={input_cfg.height},setsar=1"
+        )
 
     if input_cfg.show_label and input_cfg.label:
         chain += (

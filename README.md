@@ -78,7 +78,7 @@ The admin UI can edit:
 
 - RTSP or HTTP camera URLs
 - camera names, labels, enabled state, and cell positions
-- output URL, resolution, FPS, bitrate, encoder, VAAPI/QSV options
+- output URL, resolution, FPS, bitrate, encoder, input decode, VAAPI/QSV options
 - layout templates: auto, 3 wall, grid, focus
 
 Saving in the UI validates the full config, writes `/config/config.yaml`, and restarts only the supervised FFmpeg process. If your current config uses `${CAMERA_1_URL}` style environment variables, saving from the UI writes the resolved URL into the private config file.
@@ -94,6 +94,21 @@ Set `output.encoder` or `CAMERA_WALL_ENCODER` to one of:
 VAAPI defaults to constant-quality CQP mode because some TrueNAS Intel drivers only report CQP support. Adjust `output.vaapi_qp` or `CAMERA_WALL_VAAPI_QP`; lower values improve quality and increase bitrate. If your driver supports bitrate control, set `output.vaapi_rc_mode` to `cbr`, `vbr`, or `auto`.
 
 For Intel hardware acceleration in Docker or TrueNAS, pass `/dev/dri` into the container. If hardware initialization fails, switch back to `software` first to confirm the camera URLs and go2rtc ingest are working.
+
+## Input Hardware Decode
+
+Set `ffmpeg.input_hwaccel` or `CAMERA_WALL_INPUT_HWACCEL` to:
+
+- `software`: default, CPU decode.
+- `vaapi`: VAAPI decode for each input, then `hwdownload` back to CPU filters.
+
+The current stable pipeline still keeps scale, padding, labels, and overlay on CPU. With `vaapi` input decode, the path is:
+
+```text
+VAAPI decode -> CPU scale/pad/overlay/drawtext -> VAAPI encode
+```
+
+If a camera codec or driver rejects VAAPI decode, set `CAMERA_WALL_INPUT_HWACCEL: software` and apply again.
 
 ## Credentials
 
@@ -145,8 +160,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.2.0 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.2.0
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.3.0 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.3.0
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -187,7 +202,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.2.0
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.3.0
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host
@@ -202,6 +217,7 @@ services:
       CAMERA_WALL_BITRATE: 5M
       CAMERA_WALL_ENCODER: vaapi
       CAMERA_WALL_VAAPI_QP: "23"
+      CAMERA_WALL_INPUT_HWACCEL: vaapi
       CAMERA_1_URL: rtsp://192.168.64.10:8554/cam_a40ca720_1
       CAMERA_2_URL: rtsp://192.168.64.10:8554/cam_a70cabd8_1
       CAMERA_3_URL: rtsp://192.168.64.10:8554/cam_a60caa40_1
@@ -239,6 +255,7 @@ ffplay rtsp://192.168.64.10:8554/camera_wall
 - RTSP input is forced to TCP by default for camera stability.
 - FFmpeg reconnect options are strongest for HTTP inputs. For RTSP, the supervisor restarts the whole pipeline after FFmpeg exits. `ffmpeg.input_timeout_seconds` is disabled by default because some FFmpeg builds reject `-rw_timeout`.
 - VAAPI uses CQP by default for broad Intel driver compatibility. In this mode `output.bitrate` is only a soft configuration value for non-VAAPI encoders; use `output.vaapi_qp` to tune VAAPI quality.
+- VAAPI input decode can lower CPU use, but it still downloads frames before the CPU filter graph. It is intentionally optional because camera codecs and Intel driver support vary.
 - Hardware acceleration depends on the host kernel, `/dev/dri`, driver support, and the FFmpeg build. Use `software` as the baseline.
 
 ## References

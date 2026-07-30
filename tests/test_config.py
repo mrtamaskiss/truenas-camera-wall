@@ -96,6 +96,42 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.ffmpeg.input_timeout_seconds, 0)
 
+    def test_parses_vaapi_input_hwaccel(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "ffmpeg": {
+                "input_hwaccel": "${CAMERA_WALL_INPUT_HWACCEL:-vaapi}",
+                "hwaccel_device": "/dev/dri/renderD128",
+            },
+        }
+        config = parse_config(
+            raw,
+            {
+                "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                "CAMERA_1_URL": "rtsp://camera/stream1",
+            },
+        )
+
+        self.assertEqual(config.ffmpeg.input_hwaccel, "vaapi")
+        self.assertEqual(config.ffmpeg.hwaccel_device, "/dev/dri/renderD128")
+
+    def test_rejects_invalid_input_hwaccel(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "ffmpeg": {
+                "input_hwaccel": "cuda",
+            },
+        }
+
+        with self.assertRaises(ConfigError):
+            parse_config(
+                raw,
+                {
+                    "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                    "CAMERA_1_URL": "rtsp://camera/stream1",
+                },
+            )
+
     def test_parses_vaapi_cqp_options(self) -> None:
         raw = {
             **BASE_CONFIG,

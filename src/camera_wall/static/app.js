@@ -142,6 +142,21 @@ function renderOutput() {
       (value) => setFfmpeg("input_rtsp_transport", value)
     ),
     selectField(
+      "Input decode",
+      ffmpeg.input_hwaccel || "software",
+      [
+        ["software", "software"],
+        ["vaapi", "vaapi"],
+      ],
+      (value) => setFfmpeg("input_hwaccel", value)
+    ),
+    textField(
+      "Decode device",
+      ffmpeg.hwaccel_device || "/dev/dri/renderD128",
+      (value) => setFfmpeg("hwaccel_device", value),
+      true
+    ),
+    selectField(
       "Log level",
       ffmpeg.log_level,
       [

@@ -30,6 +30,8 @@ def valid_admin_config(count: int = 3):
         "ffmpeg": {
             "log_level": "warning",
             "input_rtsp_transport": "tcp",
+            "input_hwaccel": "vaapi",
+            "hwaccel_device": "/dev/dri/renderD128",
             "input_timeout_seconds": 0,
             "http_reconnect_delay_max_seconds": 5,
             "restart_delay_seconds": 5,

@@ -51,6 +51,8 @@ class FfmpegConfig:
     binary: str = "ffmpeg"
     log_level: str = "info"
     input_rtsp_transport: str = "tcp"
+    input_hwaccel: str = "software"
+    hwaccel_device: str = "/dev/dri/renderD128"
     input_timeout_seconds: int = 0
     http_reconnect_delay_max_seconds: int = 5
     restart_delay_seconds: int = 5
@@ -122,6 +124,16 @@ def parse_config(raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -
         log_level=_string(ffmpeg_raw.get("log_level", "info"), "ffmpeg.log_level"),
         input_rtsp_transport=_transport(
             ffmpeg_raw.get("input_rtsp_transport", "tcp"), "ffmpeg.input_rtsp_transport"
+        ),
+        input_hwaccel=_input_hwaccel(
+            _resolved_string(
+                ffmpeg_raw.get("input_hwaccel", "software"), "ffmpeg.input_hwaccel", env
+            )
+        ),
+        hwaccel_device=_resolved_string(
+            ffmpeg_raw.get("hwaccel_device", "/dev/dri/renderD128"),
+            "ffmpeg.hwaccel_device",
+            env,
         ),
         input_timeout_seconds=_nonnegative_int(
             ffmpeg_raw.get("input_timeout_seconds", 0), "ffmpeg.input_timeout_seconds"
@@ -303,6 +315,13 @@ def _vaapi_rc_mode(value: Any) -> str:
     if rc_mode not in {"cqp", "cbr", "vbr", "auto"}:
         raise ConfigError("output.vaapi_rc_mode must be one of: cqp, cbr, vbr, auto")
     return rc_mode
+
+
+def _input_hwaccel(value: Any) -> str:
+    input_hwaccel = _string(value, "ffmpeg.input_hwaccel").lower()
+    if input_hwaccel not in {"software", "vaapi"}:
+        raise ConfigError("ffmpeg.input_hwaccel must be software or vaapi")
+    return input_hwaccel
 
 
 def _transport(value: Any, name: str) -> str:

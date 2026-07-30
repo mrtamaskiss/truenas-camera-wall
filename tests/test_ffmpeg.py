@@ -4,7 +4,11 @@ from camera_wall.config import parse_config
 from camera_wall.ffmpeg import build_ffmpeg_command, build_filter_graph, masked_command
 
 
-def make_config(encoder: str = "software", output_overrides: dict | None = None):
+def make_config(
+    encoder: str = "software",
+    output_overrides: dict | None = None,
+    ffmpeg_overrides: dict | None = None,
+):
     output = {
         "url": "rtsp://192.168.64.10:8554/camera_wall",
         "width": 1920,
@@ -15,9 +19,13 @@ def make_config(encoder: str = "software", output_overrides: dict | None = None)
     }
     if output_overrides:
         output.update(output_overrides)
+    ffmpeg = {}
+    if ffmpeg_overrides:
+        ffmpeg.update(ffmpeg_overrides)
     return parse_config(
         {
             "output": output,
+            "ffmpeg": ffmpeg,
             "inputs": [
                 {
                     "name": "camera-1",
@@ -131,6 +139,24 @@ class FfmpegTests(unittest.TestCase):
         self.assertIn("-maxrate", command)
         self.assertIn("-bufsize", command)
         self.assertNotIn("-qp", command)
+
+    def test_vaapi_input_decode_args(self) -> None:
+        config = make_config(
+            "vaapi",
+            ffmpeg_overrides={
+                "input_hwaccel": "vaapi",
+                "hwaccel_device": "/dev/dri/renderD128",
+            },
+        )
+        command = build_ffmpeg_command(config)
+        graph = build_filter_graph(config)
+
+        self.assertEqual(command.count("-hwaccel"), 3)
+        self.assertIn("-hwaccel_device", command)
+        self.assertEqual(command[command.index("-hwaccel_device") + 1], "/dev/dri/renderD128")
+        self.assertIn("-hwaccel_output_format", command)
+        self.assertIn("[0:v]hwdownload,format=nv12,fps=15", graph)
+        self.assertIn("[wall_raw]format=nv12,hwupload[wall]", graph)
 
     def test_qsv_encoder_args(self) -> None:
         command = build_ffmpeg_command(make_config("qsv"))

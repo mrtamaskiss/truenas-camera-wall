@@ -31,6 +31,8 @@ DEFAULT_ADMIN_CONFIG: dict[str, Any] = {
     "ffmpeg": {
         "log_level": "warning",
         "input_rtsp_transport": "tcp",
+        "input_hwaccel": "software",
+        "hwaccel_device": "/dev/dri/renderD128",
         "input_timeout_seconds": 0,
         "http_reconnect_delay_max_seconds": 5,
         "restart_delay_seconds": 5,
@@ -130,6 +132,8 @@ def app_config_to_dict(config: AppConfig) -> dict[str, Any]:
         "ffmpeg": {
             "log_level": config.ffmpeg.log_level,
             "input_rtsp_transport": config.ffmpeg.input_rtsp_transport,
+            "input_hwaccel": config.ffmpeg.input_hwaccel,
+            "hwaccel_device": config.ffmpeg.hwaccel_device,
             "input_timeout_seconds": config.ffmpeg.input_timeout_seconds,
             "http_reconnect_delay_max_seconds": config.ffmpeg.http_reconnect_delay_max_seconds,
             "restart_delay_seconds": config.ffmpeg.restart_delay_seconds,
