@@ -240,6 +240,50 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.workers.mode, "stable")
         self.assertEqual(config.workers.slot_transport, "udp_mpegts")
 
+    def test_parses_compose_workers(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "workers": {
+                "enabled": True,
+                "mode": "compose",
+                "slot_transport": "rtsp",
+            },
+        }
+        config = parse_config(
+            raw,
+            {
+                "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                "CAMERA_1_URL": "rtsp://camera/stream1",
+            },
+        )
+
+        self.assertTrue(config.workers.enabled)
+        self.assertEqual(config.workers.mode, "compose")
+
+    def test_rejects_odd_compose_tile_geometry(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "workers": {
+                "enabled": True,
+                "mode": "compose",
+            },
+            "inputs": [
+                {
+                    **BASE_CONFIG["inputs"][0],
+                    "width": 959,
+                }
+            ],
+        }
+
+        with self.assertRaises(ConfigError):
+            parse_config(
+                raw,
+                {
+                    "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                    "CAMERA_1_URL": "rtsp://camera/stream1",
+                },
+            )
+
     def test_rejects_invalid_worker_mode(self) -> None:
         raw = {
             **BASE_CONFIG,

@@ -404,7 +404,7 @@ def build_remux_slots(config: AppConfig) -> tuple[RemuxSlot, ...]:
 
 
 def build_worker_wall_config(config: AppConfig) -> AppConfig:
-    if not config.workers.enabled:
+    if not config.workers.enabled or config.workers.mode == "compose":
         return config
     output_urls = {
         slot.input_cfg.name: slot.wall_input_url

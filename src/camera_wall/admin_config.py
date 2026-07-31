@@ -39,8 +39,8 @@ DEFAULT_ADMIN_CONFIG: dict[str, Any] = {
     },
     "workers": {
         "enabled": False,
-        "mode": "stable",
-        "slot_transport": "udp_mpegts",
+        "mode": "compose",
+        "slot_transport": "rtsp",
         "output_template": "",
         "wall_input_template": "",
         "udp_base_port": 15000,

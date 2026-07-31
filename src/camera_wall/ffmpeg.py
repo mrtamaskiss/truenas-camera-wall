@@ -89,6 +89,54 @@ def build_ffmpeg_command(
     return args
 
 
+def build_rawvideo_output_command(config: AppConfig) -> list[str]:
+    output = config.output
+    ffmpeg = config.ffmpeg
+    args = [
+        ffmpeg.binary,
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        ffmpeg.log_level,
+    ]
+
+    if output.encoder == "vaapi":
+        args.extend(
+            [
+                "-init_hw_device",
+                f"vaapi={_VAAPI_DEVICE_NAME}:{output.vaapi_device}",
+                "-filter_hw_device",
+                _VAAPI_DEVICE_NAME,
+            ]
+        )
+    elif output.encoder == "qsv":
+        args.extend(["-qsv_device", output.qsv_device])
+
+    args.extend(
+        [
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "yuv420p",
+            "-s",
+            f"{output.width}x{output.height}",
+            "-r",
+            str(output.fps),
+            "-i",
+            "pipe:0",
+            "-an",
+        ]
+    )
+    if output.encoder == "vaapi":
+        args.extend(["-vf", "format=nv12,hwupload"])
+    elif output.encoder == "qsv":
+        args.extend(["-vf", "format=nv12"])
+    args.extend(_encoder_args(config))
+    args.extend(["-r", str(output.fps), "-f", "rtsp", "-rtsp_transport", output.rtsp_transport])
+    args.extend(["-muxdelay", "0", "-flush_packets", "1", output.url])
+    return args
+
+
 def build_filter_graph(config: AppConfig, active_input_names: set[str] | None = None) -> str:
     output = config.output
     parts = [f"color=c=black:s={output.width}x{output.height}:r={output.fps},format=yuv420p[base0]"]

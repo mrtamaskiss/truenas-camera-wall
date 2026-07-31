@@ -234,7 +234,7 @@ def parse_config(raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -
     if not enabled:
         raise ConfigError("At least one input must be enabled")
     _validate_unique_names(inputs)
-    _validate_worker_config(workers, enabled)
+    _validate_worker_config(workers, output, enabled)
     return AppConfig(output=output, inputs=inputs, ffmpeg=ffmpeg, workers=workers)
 
 
@@ -415,8 +415,8 @@ def _input_hwaccel(value: Any) -> str:
 
 def _worker_mode(value: Any) -> str:
     mode = _string(value, "workers.mode").lower()
-    if mode not in {"remux", "stable"}:
-        raise ConfigError("workers.mode must be remux or stable")
+    if mode not in {"remux", "stable", "compose"}:
+        raise ConfigError("workers.mode must be remux, stable, or compose")
     return mode
 
 
@@ -450,10 +450,24 @@ def _validate_unique_names(inputs: tuple[InputConfig, ...]) -> None:
 
 
 def _validate_worker_config(
-    workers: WorkerConfig, enabled_inputs: tuple[InputConfig, ...]
+    workers: WorkerConfig, output: OutputConfig, enabled_inputs: tuple[InputConfig, ...]
 ) -> None:
+    if workers.enabled and workers.mode in {"stable", "compose"}:
+        _validate_even_layout(output, enabled_inputs)
     if not workers.enabled or workers.slot_transport != "udp_mpegts" or workers.output_template:
         return
     max_port = workers.udp_base_port + max(0, len(enabled_inputs) - 1)
     if max_port > 65535:
         raise ConfigError("workers.udp_base_port plus enabled input count exceeds 65535")
+
+
+def _validate_even_layout(
+    output: OutputConfig, enabled_inputs: tuple[InputConfig, ...]
+) -> None:
+    if output.width % 2 or output.height % 2:
+        raise ConfigError("stable and compose worker modes require even output dimensions")
+    for input_cfg in enabled_inputs:
+        if input_cfg.x % 2 or input_cfg.y % 2 or input_cfg.width % 2 or input_cfg.height % 2:
+            raise ConfigError(
+                "stable and compose worker modes require even tile coordinates and sizes"
+            )

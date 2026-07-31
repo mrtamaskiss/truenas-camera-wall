@@ -134,21 +134,21 @@ This is practical isolation for startup and recovery failures while keeping one 
 
 Worker mode is optional. It starts a separate process for each enabled camera so one camera can fail without forcing the whole wall to reconnect.
 
-For the smoothest failure behavior, use stable workers with local UDP/MPEG-TS slots:
+For the strongest failure isolation, use direct compose mode:
 
 ```text
-camera -> stable slot worker -> local UDP/MPEG-TS slot -> wall FFmpeg -> go2rtc camera_wall
+camera -> per-camera decoder -> in-process compositor -> one wall encoder -> go2rtc camera_wall
 ```
 
-In stable mode, each slot worker keeps writing a fixed-size, fixed-FPS local stream. It decodes the real camera in a restartable child process, repeats the latest live frame while the camera stalls, and switches that tile to an offline label when the frame is stale. The wall compositor keeps reading the same local stream, so one missing camera should not stall the final RTSP output.
+In compose mode, the final wall encoder never reads per-camera RTSP or UDP slot streams. A Python compositor keeps the latest frame from each camera, draws the configured wall, and feeds one continuous rawvideo stream into the final encoder. If a camera stalls, only that tile switches to its offline image while the final RTSP output keeps running.
 
 Enable it in YAML or from the admin UI:
 
 ```yaml
 workers:
   enabled: true
-  mode: stable
-  slot_transport: udp_mpegts
+  mode: compose
+  slot_transport: rtsp
   output_template: ""
   wall_input_template: ""
   udp_base_port: 15000
@@ -164,7 +164,37 @@ workers:
   wall_input_preflight: false
 ```
 
-Stable mode is heavier than remux mode because every camera is decoded and encoded once before the final compositor. The per-slot streams are local and low-latency, and the final wall output can still use VAAPI/QSV/software according to `output.encoder`.
+Compose mode is heavier than direct FFmpeg overlay because Python copies full YUV frames at the output FPS, but it removes the per-camera slot streams from the final FFmpeg input path. The final wall output can still use VAAPI/QSV/software according to `output.encoder`.
+
+Stable slot mode is still available when you want the older per-camera slot topology:
+
+```text
+camera -> stable slot worker -> RTSP or UDP slot -> wall FFmpeg -> go2rtc camera_wall
+```
+
+In stable mode, each slot worker keeps writing a fixed-size, fixed-FPS local stream. It decodes the real camera in a restartable child process, repeats the latest live frame while the camera stalls, and switches that tile to an offline label when the frame is stale. The wall compositor keeps reading the same local stream, so one missing camera is less likely to stall the final RTSP output, but slot transport interruptions can still make FFmpeg reconnect.
+
+Stable mode example:
+
+```yaml
+workers:
+  enabled: true
+  mode: stable
+  slot_transport: rtsp
+  output_template: rtsp://192.168.64.10:8554/camera_wall_slot_{index}
+  wall_input_template: rtsp://192.168.64.10:8554/camera_wall_slot_{index}
+  udp_base_port: 15000
+  udp_fifo_size: 4096
+  stable_slot_bitrate: 2500k
+  rtsp_transport: tcp
+  fallback_enabled: true
+  restart_delay_seconds: 5
+  start_grace_seconds: 2
+  retry_live_seconds: 15
+  retry_probe_timeout_seconds: 3
+  stall_timeout_seconds: 3
+  wall_input_preflight: false
+```
 
 The lower-load remux mode is still available:
 
@@ -316,8 +346,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.11.2 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.11.2
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.12.0 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.12.0
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -360,7 +390,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.11.2
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.12.0
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host
@@ -421,8 +451,9 @@ ffplay rtsp://192.168.64.10:8554/camera_wall
 - Browser compatibility is simplest with H.264 video. This app encodes `yuv420p` for software mode and `nv12` for hardware encoders.
 - RTSP input is forced to TCP by default for camera stability.
 - FFmpeg reconnect options are strongest for HTTP inputs. For direct RTSP inputs without workers, the supervisor restarts the whole pipeline after FFmpeg exits. `ffmpeg.input_timeout_seconds` is disabled by default because some FFmpeg builds reject `-rw_timeout`.
-- Input preflight prevents startup failure of one direct RTSP input from blocking the whole wall. With stable workers, leave `workers.wall_input_preflight` off so the wall keeps reading the local slot streams.
-- Stable UDP/MPEG-TS workers are the recommended mode when VLC should keep the final wall stream open while one camera fails or recovers.
+- Input preflight prevents startup failure of one direct RTSP input from blocking the whole wall. With compose workers, `workers.wall_input_preflight` is ignored so camera recovery does not restart the final wall encoder.
+- Compose workers are the recommended mode when VLC should keep the final wall stream open while one camera fails or recovers.
+- Stable slot workers are useful for diagnostics and lower memory copying, but RTSP/UDP slot interruptions can still make the final FFmpeg input reconnect.
 - Remux workers reduce load, but they still republish the camera bitstream and may briefly interrupt a wall input when switching between live and fallback publishers.
 - Stream diagnostics use `ffprobe` with a Python-side timeout. A passing probe confirms that FFmpeg can read the camera stream, but it does not guarantee the long-running wall pipeline will never reconnect later.
 - VAAPI uses CQP by default for broad Intel driver compatibility. In this mode `output.bitrate` is only a soft configuration value for non-VAAPI encoders; use `output.vaapi_qp` to tune VAAPI quality.

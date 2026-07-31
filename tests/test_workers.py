@@ -189,6 +189,13 @@ class WorkerTests(unittest.TestCase):
         )
         self.assertEqual(config.inputs[0].url, "rtsp://user:pass@192.168.64.21/stream1")
 
+    def test_compose_mode_does_not_rewrite_wall_inputs(self) -> None:
+        config = make_config({"mode": "compose", "slot_transport": "rtsp"})
+        wall_config = build_worker_wall_config(config)
+
+        self.assertEqual(wall_config.inputs[0].url, config.inputs[0].url)
+        self.assertEqual(wall_config.inputs[1].url, config.inputs[1].url)
+
     def test_remux_slots_include_enabled_inputs_only(self) -> None:
         config = make_config()
         slots = build_remux_slots(config)

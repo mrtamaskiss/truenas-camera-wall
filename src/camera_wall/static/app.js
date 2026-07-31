@@ -205,6 +205,7 @@ function renderOutput() {
       "Worker mode",
       workers.mode || "remux",
       [
+        ["compose", "compose"],
         ["stable", "stable"],
         ["remux", "remux"],
       ],
@@ -537,8 +538,8 @@ function ensureFfmpeg() {
 function ensureWorkers() {
   state.config.workers ||= {
     enabled: false,
-    mode: "stable",
-    slot_transport: "udp_mpegts",
+    mode: "compose",
+    slot_transport: "rtsp",
     output_template: "",
     wall_input_template: "",
     udp_base_port: 15000,

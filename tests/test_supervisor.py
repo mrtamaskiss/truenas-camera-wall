@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from camera_wall import __version__
 from camera_wall.config import parse_config
-from camera_wall.supervisor import CameraWallSupervisor, _runtime_summary
+from camera_wall.supervisor import CameraWallSupervisor, _build_wall_command, _runtime_summary
 
 
 def make_config():
@@ -67,6 +67,33 @@ def make_worker_config():
     )
 
 
+def make_compose_config():
+    return parse_config(
+        {
+            "output": {
+                "url": "rtsp://192.168.64.10:8554/camera_wall",
+                "width": 1920,
+                "height": 1080,
+            },
+            "workers": {
+                "enabled": True,
+                "mode": "compose",
+            },
+            "inputs": [
+                {
+                    "name": "camera-1",
+                    "enabled": True,
+                    "url": "rtsp://camera-1/stream1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 960,
+                    "height": 540,
+                },
+            ],
+        }
+    )
+
+
 class SupervisorTests(unittest.TestCase):
     @patch.dict("os.environ", {"CAMERA_WALL_GPU_STATS_ENABLED": "false"})
     def test_preflight_omits_failed_inputs(self) -> None:
@@ -112,6 +139,19 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(summary["worker_inputs"], 1)
         self.assertFalse(summary["input_preflight"])
         self.assertFalse(summary["worker_wall_preflight"])
+
+    def test_runtime_summary_reports_compose_transport(self) -> None:
+        summary = _runtime_summary(make_compose_config(), {"camera-1"}, False)
+
+        self.assertEqual(summary["workers"], "compose")
+        self.assertEqual(summary["worker_transport"], "direct")
+
+    def test_compose_mode_builds_compositor_command(self) -> None:
+        command = _build_wall_command("/config/config.yaml", make_compose_config(), {"camera-1"})
+
+        self.assertIn("camera_wall.compositor", command)
+        self.assertIn("--config", command)
+        self.assertIn("/config/config.yaml", command)
 
 
 if __name__ == "__main__":

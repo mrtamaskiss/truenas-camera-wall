@@ -61,7 +61,11 @@ class CameraWallSupervisor:
                 try:
                     config = load_config(self.config_path)
                     self._input_health.configure(config)
-                    workers_changed = self._worker_manager.reconcile(config)
+                    if _direct_compose_enabled(config):
+                        self._worker_manager.stop()
+                        workers_changed = False
+                    else:
+                        workers_changed = self._worker_manager.reconcile(config)
                     if workers_changed and config.workers.enabled and config.workers.start_grace_seconds:
                         logging.info(
                             "Waiting %s seconds for remux worker RTSP publishes",
@@ -70,7 +74,8 @@ class CameraWallSupervisor:
                         self._sleep_or_wake(config.workers.start_grace_seconds)
                         if self.stop_requested.is_set() or self.restart_requested.is_set():
                             continue
-                    self._worker_manager.poll()
+                    if not _direct_compose_enabled(config):
+                        self._worker_manager.poll()
                     wall_config = build_worker_wall_config(config)
                     wall_preflight_enabled = _wall_preflight_enabled(
                         config, self._preflight_enabled
@@ -80,7 +85,11 @@ class CameraWallSupervisor:
                         wall_preflight_enabled,
                     )
                     self._input_health.mark_preflight(active_input_names, failures)
-                    command = build_ffmpeg_command(wall_config, active_input_names)
+                    command = _build_wall_command(
+                        self.config_path,
+                        wall_config,
+                        active_input_names,
+                    )
                     self._restart_delay_seconds = config.ffmpeg.restart_delay_seconds
                 except ConfigError as exc:
                     self._worker_manager.stop()
@@ -366,7 +375,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_command:
         try:
             config = load_config(args.config)
-            command = build_ffmpeg_command(build_worker_wall_config(config))
+            wall_config = build_worker_wall_config(config)
+            command = _build_wall_command(
+                Path(args.config),
+                wall_config,
+                {item.name for item in wall_config.enabled_inputs},
+            )
         except ConfigError as exc:
             logging.error("Configuration error: %s", exc)
             return 2
@@ -503,7 +517,7 @@ def _runtime_summary(
         "offline_inputs": max(0, enabled_count - active_count),
         "input_preflight": preflight_enabled,
         "workers": config.workers.mode if config.workers.enabled else "off",
-        "worker_transport": config.workers.slot_transport if config.workers.enabled else "-",
+        "worker_transport": _worker_transport_summary(config),
         "worker_fallback": config.workers.fallback_enabled if config.workers.enabled else False,
         "worker_inputs": enabled_count if config.workers.enabled else 0,
         "worker_wall_preflight": config.workers.wall_input_preflight
@@ -512,10 +526,34 @@ def _runtime_summary(
     }
 
 
+def _worker_transport_summary(config: AppConfig) -> str:
+    if not config.workers.enabled:
+        return "-"
+    if config.workers.mode == "compose":
+        return "direct"
+    return config.workers.slot_transport
+
+
 def _wall_preflight_enabled(config: AppConfig, default_enabled: bool) -> bool:
     if not config.workers.enabled:
         return default_enabled
+    if _direct_compose_enabled(config):
+        return False
     return config.workers.wall_input_preflight
+
+
+def _direct_compose_enabled(config: AppConfig) -> bool:
+    return config.workers.enabled and config.workers.mode == "compose"
+
+
+def _build_wall_command(
+    config_path: Path,
+    config: AppConfig,
+    active_input_names: set[str],
+) -> list[str]:
+    if _direct_compose_enabled(config):
+        return [sys.executable, "-m", "camera_wall.compositor", "--config", str(config_path)]
+    return build_ffmpeg_command(config, active_input_names)
 
 
 def _log_process_output(process: subprocess.Popen[str], on_line: object | None = None) -> None:

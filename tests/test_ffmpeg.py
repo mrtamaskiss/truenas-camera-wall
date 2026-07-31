@@ -1,7 +1,13 @@
 import unittest
 
 from camera_wall.config import parse_config
-from camera_wall.ffmpeg import build_ffmpeg_command, build_filter_graph, mask_text, masked_command
+from camera_wall.ffmpeg import (
+    build_ffmpeg_command,
+    build_filter_graph,
+    build_rawvideo_output_command,
+    mask_text,
+    masked_command,
+)
 
 
 def make_config(
@@ -237,6 +243,20 @@ class FfmpegTests(unittest.TestCase):
         self.assertIn("-qsv_device", command)
         self.assertIn("h264_qsv", command)
         self.assertIn("[wall_raw]format=nv12[wall]", graph)
+
+    def test_rawvideo_output_command_uses_encoder_settings(self) -> None:
+        command = build_rawvideo_output_command(make_config("vaapi"))
+
+        self.assertIn("-f", command)
+        self.assertIn("rawvideo", command)
+        self.assertIn("-pix_fmt", command)
+        self.assertIn("yuv420p", command)
+        self.assertIn("-s", command)
+        self.assertEqual(command[command.index("-s") + 1], "1920x1080")
+        self.assertIn("-vf", command)
+        self.assertEqual(command[command.index("-vf") + 1], "format=nv12,hwupload")
+        self.assertIn("h264_vaapi", command)
+        self.assertEqual(command[-1], "rtsp://192.168.64.10:8554/camera_wall")
 
     def test_masked_command_hides_credentials(self) -> None:
         rendered = masked_command(build_ffmpeg_command(make_config()))
