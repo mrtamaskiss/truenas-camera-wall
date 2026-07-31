@@ -12,10 +12,12 @@ _URL_CREDENTIAL_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]*://)([^/\s:@]+):([^@
 _VAAPI_DEVICE_NAME = "camera_wall_vaapi"
 
 
-def build_ffmpeg_command(config: AppConfig) -> list[str]:
+def build_ffmpeg_command(
+    config: AppConfig, active_input_names: set[str] | None = None
+) -> list[str]:
     output = config.output
     ffmpeg = config.ffmpeg
-    inputs = config.enabled_inputs
+    inputs = _active_inputs(config, active_input_names)
 
     args = [
         ffmpeg.binary,
@@ -68,7 +70,7 @@ def build_ffmpeg_command(config: AppConfig) -> list[str]:
             args.extend(["-rw_timeout", timeout_us])
         args.extend(["-i", input_cfg.url])
 
-    filter_graph = build_filter_graph(config)
+    filter_graph = build_filter_graph(config, active_input_names)
     args.extend(["-filter_complex", filter_graph, "-map", "[wall]", "-an"])
     args.extend(_encoder_args(config))
     args.extend(["-r", str(output.fps), "-f", "rtsp", "-rtsp_transport", output.rtsp_transport])
@@ -76,18 +78,18 @@ def build_ffmpeg_command(config: AppConfig) -> list[str]:
     return args
 
 
-def build_filter_graph(config: AppConfig) -> str:
+def build_filter_graph(config: AppConfig, active_input_names: set[str] | None = None) -> str:
     output = config.output
     parts = [f"color=c=black:s={output.width}x{output.height}:r={output.fps},format=yuv420p[base0]"]
     base_label = _add_offline_placeholders(parts, config.enabled_inputs)
+    active_inputs = _active_inputs(config, active_input_names)
 
-    for index, input_cfg in enumerate(config.enabled_inputs):
+    for index, input_cfg in enumerate(active_inputs):
         parts.append(_input_filter(index, input_cfg, output.fps, config.ffmpeg.input_hwaccel))
 
     last_label = base_label
-    enabled_inputs = config.enabled_inputs
-    for index, input_cfg in enumerate(enabled_inputs):
-        next_label = f"tmp{index}" if index < len(enabled_inputs) - 1 else "wall_raw"
+    for index, input_cfg in enumerate(active_inputs):
+        next_label = f"tmp{index}" if index < len(active_inputs) - 1 else "wall_raw"
         parts.append(
             f"[{last_label}][v{index}]"
             f"overlay=x={input_cfg.x}:y={input_cfg.y}:shortest=0:eof_action=pass"
@@ -95,12 +97,13 @@ def build_filter_graph(config: AppConfig) -> str:
         )
         last_label = next_label
 
+    wall_raw = last_label
     if output.encoder == "vaapi":
-        parts.append("[wall_raw]format=nv12,hwupload[wall]")
+        parts.append(f"[{wall_raw}]format=nv12,hwupload[wall]")
     elif output.encoder == "qsv":
-        parts.append("[wall_raw]format=nv12[wall]")
+        parts.append(f"[{wall_raw}]format=nv12[wall]")
     else:
-        parts.append("[wall_raw]format=yuv420p[wall]")
+        parts.append(f"[{wall_raw}]format=yuv420p[wall]")
     return ";".join(parts)
 
 
@@ -163,6 +166,14 @@ def _add_offline_placeholders(parts: list[str], inputs: tuple[InputConfig, ...])
         )
         last_label = next_label
     return last_label
+
+
+def _active_inputs(
+    config: AppConfig, active_input_names: set[str] | None
+) -> tuple[InputConfig, ...]:
+    if active_input_names is None:
+        return config.enabled_inputs
+    return tuple(input_cfg for input_cfg in config.enabled_inputs if input_cfg.name in active_input_names)
 
 
 def _encoder_args(config: AppConfig) -> list[str]:

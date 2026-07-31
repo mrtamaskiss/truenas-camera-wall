@@ -64,6 +64,28 @@ class InputHealthTests(unittest.TestCase):
         self.assertIn("Connection timed out", snapshot[0]["last_error"])
         self.assertEqual(snapshot[1]["state"], "disabled")
 
+    def test_marks_preflight_offline_inputs(self) -> None:
+        tracker = InputHealthTracker()
+        tracker.configure(make_config())
+        tracker.mark_preflight(set(), {"front": "Connection timed out"})
+
+        snapshot = tracker.snapshot()
+
+        self.assertEqual(snapshot[0]["state"], "offline")
+        self.assertEqual(snapshot[0]["last_error"], "Connection timed out")
+        self.assertIsNone(snapshot[0]["ffmpeg_index"])
+        self.assertEqual(snapshot[1]["state"], "disabled")
+
+    def test_started_only_marks_active_preflight_inputs(self) -> None:
+        tracker = InputHealthTracker()
+        tracker.configure(make_config())
+        tracker.mark_preflight(set(), {"front": "Connection timed out"})
+        tracker.mark_started(set())
+
+        snapshot = tracker.snapshot()
+
+        self.assertEqual(snapshot[0]["state"], "offline")
+
 
 if __name__ == "__main__":
     unittest.main()

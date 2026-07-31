@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import os
 from pathlib import Path
@@ -10,7 +11,8 @@ import sys
 import threading
 import time
 
-from .config import AppConfig, ConfigError, load_config
+from .config import AppConfig, ConfigError, InputConfig, load_config
+from .diagnostics import StreamProbeRequest, diagnose_stream
 from .ffmpeg import build_ffmpeg_command, mask_text, masked_command
 from .gpu import GpuMonitor
 from .input_health import InputHealthTracker
@@ -41,6 +43,10 @@ class CameraWallSupervisor:
         self._restart_delay_seconds = 5
         self._gpu_monitor = GpuMonitor.from_env()
         self._input_health = InputHealthTracker()
+        self._preflight_enabled = _env_bool("CAMERA_WALL_INPUT_PREFLIGHT_ENABLED", True)
+        self._preflight_timeout_seconds = _env_int("CAMERA_WALL_INPUT_PREFLIGHT_TIMEOUT", 5)
+        self._preflight_concurrency = _env_int("CAMERA_WALL_INPUT_PREFLIGHT_CONCURRENCY", 4)
+        self._reprobe_seconds = _env_int("CAMERA_WALL_INPUT_REPROBE_SECONDS", 30)
         self._gpu_monitor.start()
 
     def run(self) -> int:
@@ -52,7 +58,9 @@ class CameraWallSupervisor:
                 try:
                     config = load_config(self.config_path)
                     self._input_health.configure(config)
-                    command = build_ffmpeg_command(config)
+                    active_input_names, failures = self._preflight_inputs(config)
+                    self._input_health.mark_preflight(active_input_names, failures)
+                    command = build_ffmpeg_command(config, active_input_names)
                     self._restart_delay_seconds = config.ffmpeg.restart_delay_seconds
                 except ConfigError as exc:
                     self._set_state(last_error=str(exc), last_command=None, runtime={})
@@ -65,10 +73,10 @@ class CameraWallSupervisor:
                 self._set_state(
                     last_error=None,
                     last_command=rendered_command,
-                    runtime=_runtime_summary(config),
+                    runtime=_runtime_summary(config, active_input_names, self._preflight_enabled),
                 )
                 logging.info("FFmpeg command: %s", rendered_command)
-                exit_code = self._run_once(command)
+                exit_code = self._run_once(command, config, active_input_names)
                 if self.stop_requested.is_set():
                     return exit_code
                 if self.restart_requested.is_set():
@@ -121,9 +129,12 @@ class CameraWallSupervisor:
                 "gpu": self._gpu_monitor.snapshot(),
             }
 
-    def _run_once(self, command: list[str]) -> int:
+    def _run_once(
+        self, command: list[str], config: AppConfig, active_input_names: set[str]
+    ) -> int:
         PID_FILE.parent.mkdir(parents=True, exist_ok=True)
         reader: threading.Thread | None = None
+        next_reprobe = time.monotonic() + max(1, self._reprobe_seconds)
         try:
             self._current_process = subprocess.Popen(
                 command,
@@ -143,22 +154,27 @@ class CameraWallSupervisor:
             reader.start()
             PID_FILE.write_text(str(self._current_process.pid), encoding="utf-8")
             self._set_state(last_started_at=_utc_now(), last_exit_code=None)
-            self._input_health.mark_started()
+            self._input_health.mark_started(active_input_names)
             logging.info("FFmpeg started with pid %s", self._current_process.pid)
             while True:
                 exit_code = self._current_process.poll()
                 if exit_code is not None:
                     self._set_state(last_exit_code=exit_code)
-                    self._input_health.mark_stopped(exit_code)
+                    self._input_health.mark_stopped(exit_code, active_input_names)
                     return exit_code
+                if self._should_reprobe(config, active_input_names, next_reprobe):
+                    next_reprobe = time.monotonic() + max(1, self._reprobe_seconds)
+                    recovered = self._reprobe_offline_inputs(config, active_input_names)
+                    if recovered:
+                        self.request_restart(f"input recovered: {', '.join(sorted(recovered))}")
                 if self.stop_requested.is_set() or self.restart_requested.is_set():
                     requested_restart = self.restart_requested.is_set()
-                    self._input_health.mark_restarting()
+                    self._input_health.mark_restarting(active_input_names)
                     self._terminate_process(self._current_process)
                     exit_code = self._current_process.wait()
                     self._set_state(last_exit_code=exit_code)
                     if not requested_restart:
-                        self._input_health.mark_stopped(exit_code)
+                        self._input_health.mark_stopped(exit_code, active_input_names)
                     return exit_code
                 time.sleep(0.5)
         except FileNotFoundError:
@@ -173,6 +189,80 @@ class CameraWallSupervisor:
                 PID_FILE.unlink()
             except FileNotFoundError:
                 pass
+
+    def _preflight_inputs(self, config: AppConfig) -> tuple[set[str], dict[str, str]]:
+        inputs = config.enabled_inputs
+        if not self._preflight_enabled:
+            return {item.name for item in inputs}, {}
+        if not inputs:
+            return set(), {}
+
+        logging.info(
+            "Preflighting %s input stream(s) with %s second timeout",
+            len(inputs),
+            self._preflight_timeout_seconds,
+        )
+        active: set[str] = set()
+        failures: dict[str, str] = {}
+        max_workers = max(1, min(self._preflight_concurrency, len(inputs)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._probe_input, config, input_cfg): input_cfg.name
+                for input_cfg in inputs
+            }
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:  # pragma: no cover - defensive thread boundary
+                    result = {"ok": False, "message": f"Probe failed: {exc}"}
+                if result.get("ok"):
+                    active.add(name)
+                else:
+                    failures[name] = str(result.get("message") or "Input probe failed")
+
+        if failures:
+            for name, message in sorted(failures.items()):
+                logging.warning("Input %s omitted from wall: %s", name, message)
+        if not active:
+            logging.warning("No camera inputs passed preflight; publishing offline wall")
+        return active, failures
+
+    def _probe_input(self, config: AppConfig, input_cfg: InputConfig) -> dict[str, object]:
+        request = StreamProbeRequest(
+            url=input_cfg.url,
+            name=input_cfg.name,
+            rtsp_transport=config.ffmpeg.input_rtsp_transport,
+            timeout_seconds=self._preflight_timeout_seconds,
+        )
+        return diagnose_stream(request)
+
+    def _should_reprobe(
+        self, config: AppConfig, active_input_names: set[str], next_reprobe: float
+    ) -> bool:
+        if not self._preflight_enabled or self._reprobe_seconds <= 0:
+            return False
+        if self.restart_requested.is_set() or self.stop_requested.is_set():
+            return False
+        offline = [item for item in config.enabled_inputs if item.name not in active_input_names]
+        return bool(offline) and time.monotonic() >= next_reprobe
+
+    def _reprobe_offline_inputs(
+        self, config: AppConfig, active_input_names: set[str]
+    ) -> set[str]:
+        recovered: set[str] = set()
+        for input_cfg in config.enabled_inputs:
+            if input_cfg.name in active_input_names:
+                continue
+            result = self._probe_input(config, input_cfg)
+            if result.get("ok"):
+                recovered.add(input_cfg.name)
+            else:
+                self._input_health.mark_failed(
+                    input_cfg.name,
+                    str(result.get("message") or "Input probe failed"),
+                )
+        return recovered
 
     def _terminate_process(self, process: subprocess.Popen[str]) -> None:
         if process.poll() is not None:
@@ -330,13 +420,24 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _runtime_summary(config: AppConfig) -> dict[str, object]:
+def _runtime_summary(
+    config: AppConfig, active_input_names: set[str], preflight_enabled: bool
+) -> dict[str, object]:
     output = config.output
     ffmpeg = config.ffmpeg
+    enabled_count = len(config.enabled_inputs)
+    active_count = len(active_input_names)
     return {
         "output_url": output.url,
         "resolution": f"{output.width}x{output.height}",
@@ -344,7 +445,10 @@ def _runtime_summary(config: AppConfig) -> dict[str, object]:
         "bitrate": output.bitrate,
         "encoder": output.encoder,
         "input_hwaccel": ffmpeg.input_hwaccel,
-        "enabled_inputs": len(config.enabled_inputs),
+        "enabled_inputs": enabled_count,
+        "active_inputs": active_count,
+        "offline_inputs": max(0, enabled_count - active_count),
+        "input_preflight": preflight_enabled,
     }
 
 

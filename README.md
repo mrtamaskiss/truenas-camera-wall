@@ -11,7 +11,7 @@ It reads multiple RTSP or HTTP camera inputs, renders them into one H.264 wall s
 - `camera_wall.input_health` tracks enabled, disabled, active, restarting, and failed camera states for the admin UI.
 - `camera_wall.gpu` samples Intel GPU utilization with `intel_gpu_top` when the host exposes the required counters.
 - `camera_wall.diagnostics` probes camera streams, output targets, and local GPU metric access for the admin UI.
-- `camera_wall.supervisor` starts FFmpeg, logs a credential-masked command, and restarts the pipeline when FFmpeg exits or the admin UI applies a new config.
+- `camera_wall.supervisor` preflights inputs, starts FFmpeg, logs a credential-masked command, and restarts the pipeline when FFmpeg exits, a camera recovers, or the admin UI applies a new config.
 - `camera_wall.web` serves the admin UI and writes the private YAML config mounted at `/config/config.yaml`.
 - Docker healthcheck reports healthy only while the supervised FFmpeg process is alive.
 
@@ -49,6 +49,8 @@ rtsp://192.168.64.10:8554/camera_wall
 ```
 
 This project sends video only. If a player path requires audio later, add AAC audio in go2rtc or extend the FFmpeg command.
+
+go2rtc is not replaced by this app. In the recommended setup, go2rtc remains the streaming broker: cameras can be normalized behind go2rtc URLs, the camera-wall app publishes one composed wall stream back to go2rtc, and viewers connect to go2rtc instead of the compositor container.
 
 ## Local Docker Compose
 
@@ -99,6 +101,22 @@ The admin UI includes checks that run without saving the config:
 - `Test GPU` checks `/dev/dri`, the configured render device, `intel_gpu_top`, and whether GPU load counters are readable.
 
 Diagnostic results mask credentials before returning data to the browser.
+
+## Input Isolation
+
+Input preflight is enabled by default. Before starting FFmpeg, the supervisor probes every enabled camera. Streams that pass the probe are included as real FFmpeg inputs. Streams that fail are omitted from the input list, but their tile remains on the wall as an offline placeholder.
+
+If an omitted camera later recovers, the supervisor requests a controlled FFmpeg restart so the recovered stream can join the wall.
+
+Environment variables:
+
+```text
+CAMERA_WALL_INPUT_PREFLIGHT_ENABLED=true
+CAMERA_WALL_INPUT_PREFLIGHT_TIMEOUT=5
+CAMERA_WALL_INPUT_REPROBE_SECONDS=30
+```
+
+This is practical isolation for startup and recovery failures while keeping one compositor process. go2rtc is still the preferred ingest/fanout layer.
 
 ## Encoder Selection
 
@@ -197,8 +215,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.6.0 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.6.0
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.7.0 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.7.0
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -239,7 +257,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.6.0
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.7.0
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host
@@ -254,6 +272,9 @@ services:
       CAMERA_WALL_GPU_STATS_ENABLED: "true"
       CAMERA_WALL_GPU_DEVICE: /dev/dri/renderD128
       CAMERA_WALL_GPU_SAMPLE_SECONDS: "5"
+      CAMERA_WALL_INPUT_PREFLIGHT_ENABLED: "true"
+      CAMERA_WALL_INPUT_PREFLIGHT_TIMEOUT: "5"
+      CAMERA_WALL_INPUT_REPROBE_SECONDS: "30"
       OUTPUT_URL: rtsp://192.168.64.10:8554/camera_wall
       CAMERA_WALL_BITRATE: 5M
       CAMERA_WALL_ENCODER: vaapi
@@ -297,7 +318,7 @@ ffplay rtsp://192.168.64.10:8554/camera_wall
 - Browser compatibility is simplest with H.264 video. This app encodes `yuv420p` for software mode and `nv12` for hardware encoders.
 - RTSP input is forced to TCP by default for camera stability.
 - FFmpeg reconnect options are strongest for HTTP inputs. For RTSP, the supervisor restarts the whole pipeline after FFmpeg exits. `ffmpeg.input_timeout_seconds` is disabled by default because some FFmpeg builds reject `-rw_timeout`.
-- Per-camera input health is best-effort with the current single FFmpeg process. Startup failure of one RTSP input can still restart the whole wall; the offline tile placeholder is visible when FFmpeg can keep the wall graph alive without that overlay.
+- Input preflight prevents startup failure of one RTSP input from blocking the whole wall. Runtime failures can still cause FFmpeg to exit, but the next supervisor cycle re-probes inputs and can publish the wall without the failed camera.
 - Stream diagnostics use `ffprobe` with a Python-side timeout. A passing probe confirms that FFmpeg can read the camera stream, but it does not guarantee the long-running wall pipeline will never reconnect later.
 - VAAPI uses CQP by default for broad Intel driver compatibility. In this mode `output.bitrate` is only a soft configuration value for non-VAAPI encoders; use `output.vaapi_qp` to tune VAAPI quality.
 - VAAPI input decode can lower CPU use, but it still downloads frames before the CPU filter graph. It is intentionally optional because camera codecs and Intel driver support vary.

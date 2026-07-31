@@ -80,26 +80,47 @@ class InputHealthTracker:
                 if state.enabled:
                     state.state = "failed" if error else "unknown"
                     state.last_error = error
+                    state.ffmpeg_index = None
 
-    def mark_started(self) -> None:
+    def mark_preflight(self, active_input_names: set[str], failures: dict[str, str]) -> None:
+        with self._lock:
+            ffmpeg_index = 0
+            for state in self._states:
+                if not state.enabled:
+                    state.ffmpeg_index = None
+                    state.state = "disabled"
+                    continue
+                if state.name in active_input_names:
+                    state.ffmpeg_index = ffmpeg_index
+                    state.state = "connecting"
+                    state.last_error = None
+                    ffmpeg_index += 1
+                else:
+                    state.ffmpeg_index = None
+                    state.state = "offline"
+                    state.last_error = failures.get(state.name, "Input is offline")
+
+    def mark_started(self, active_input_names: set[str] | None = None) -> None:
         with self._lock:
             now = _utc_now()
             for state in self._states:
-                if state.enabled:
+                if state.enabled and (active_input_names is None or state.name in active_input_names):
                     state.state = "active"
                     state.last_error = None
                     state.last_seen_at = now
 
-    def mark_restarting(self) -> None:
+    def mark_restarting(self, active_input_names: set[str] | None = None) -> None:
         with self._lock:
             for state in self._states:
-                if state.enabled:
+                if state.enabled and (active_input_names is None or state.name in active_input_names):
                     state.state = "restarting"
 
-    def mark_stopped(self, exit_code: int | None) -> None:
+    def mark_stopped(self, exit_code: int | None, active_input_names: set[str] | None = None) -> None:
         with self._lock:
             for state in self._states:
                 if not state.enabled:
+                    continue
+                if active_input_names is not None and state.name not in active_input_names:
                     continue
                 if exit_code == 0:
                     state.state = "stopped"
@@ -107,6 +128,15 @@ class InputHealthTracker:
                 else:
                     state.state = "failed"
                     state.last_error = f"FFmpeg exited with code {exit_code}"
+
+    def mark_failed(self, name: str, error: str) -> None:
+        with self._lock:
+            for state in self._states:
+                if state.name == name:
+                    state.state = "offline"
+                    state.last_error = error
+                    state.ffmpeg_index = None
+                    return
 
     def process_ffmpeg_line(self, line: str) -> None:
         lowered = line.lower()

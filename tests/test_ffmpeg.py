@@ -111,6 +111,29 @@ class FfmpegTests(unittest.TestCase):
         self.assertEqual(command[command.index("-bufsize") + 1], "10M")
         self.assertEqual(command[-1], "rtsp://192.168.64.10:8554/camera_wall")
 
+    def test_active_input_subset_keeps_offline_placeholders(self) -> None:
+        config = make_config()
+        command = build_ffmpeg_command(config, {"camera-2"})
+        graph = build_filter_graph(config, {"camera-2"})
+
+        self.assertEqual(command.count("-i"), 1)
+        self.assertIn("rtsp://user:pass@192.168.64.22/stream1", command)
+        self.assertNotIn("rtsp://user:pass@192.168.64.21/stream1", command)
+        self.assertIn("drawtext=text='Camera 1 offline'", graph)
+        self.assertIn("drawtext=text='camera-2 offline'", graph)
+        self.assertIn("[0:v]fps=15", graph)
+        self.assertNotIn("[1:v]fps=15", graph)
+        self.assertIn("overlay=x=960:y=0", graph)
+
+    def test_empty_active_input_subset_outputs_offline_wall(self) -> None:
+        config = make_config()
+        command = build_ffmpeg_command(config, set())
+        graph = build_filter_graph(config, set())
+
+        self.assertEqual(command.count("-i"), 0)
+        self.assertNotIn("overlay=", graph)
+        self.assertIn("[base3]format=yuv420p[wall]", graph)
+
     def test_input_timeout_is_optional(self) -> None:
         command = build_ffmpeg_command(make_config_with_timeout(15))
 

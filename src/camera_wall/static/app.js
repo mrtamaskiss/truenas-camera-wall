@@ -644,6 +644,8 @@ function renderStatus(status) {
     ["FPS", runtime.fps || "-"],
     ["Bitrate", runtime.bitrate || "-"],
     ["Inputs", runtime.enabled_inputs ?? "-"],
+    ["Active inputs", runtime.active_inputs ?? "-"],
+    ["Offline inputs", runtime.offline_inputs ?? "-"],
   ];
   if (gpu.enabled !== false) {
     items.push(["GPU load", gpu.available ? formatPercent(gpu.load_percent) : "unavailable"]);
@@ -877,7 +879,7 @@ function inputHealthFor(index, camera) {
 
 function healthStateClass(value) {
   if (value === "active") return "ok";
-  if (value === "connecting" || value === "restarting") return "warn";
+  if (value === "connecting" || value === "restarting" || value === "offline") return "warn";
   if (value === "failed" || value === "stopped") return "bad";
   if (value === "disabled") return "disabled";
   return "unknown";
