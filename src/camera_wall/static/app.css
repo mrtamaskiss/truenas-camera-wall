@@ -264,6 +264,18 @@ h3 {
   opacity: 0.36;
 }
 
+.preview-cell.bad {
+  background:
+    linear-gradient(135deg, rgba(180, 35, 24, 0.68), rgba(17, 24, 22, 0.72)),
+    #160d0c;
+}
+
+.preview-cell.warn {
+  background:
+    linear-gradient(135deg, rgba(180, 83, 9, 0.62), rgba(23, 33, 30, 0.62)),
+    #21170e;
+}
+
 .preview-cell span {
   display: block;
   overflow: hidden;
@@ -363,6 +375,99 @@ h3 {
   line-height: 1.35;
 }
 
+.input-health {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.input-health-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+}
+
+.input-health-row.ok {
+  border-color: #a6d9c2;
+}
+
+.input-health-row.warn {
+  border-color: #f4d19f;
+}
+
+.input-health-row.bad {
+  border-color: #efb4ad;
+}
+
+.input-health-row.disabled {
+  opacity: 0.62;
+}
+
+.input-health-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.input-health-main strong,
+.input-health-main span,
+.input-health-side span {
+  overflow-wrap: anywhere;
+}
+
+.input-health-main strong {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.input-health-main span,
+.input-health-side span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.input-health-side {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.input-health-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.input-health-pill.ok {
+  border-color: #a6d9c2;
+  color: var(--ok);
+}
+
+.input-health-pill.warn {
+  border-color: #f4d19f;
+  color: var(--warn);
+}
+
+.input-health-pill.bad {
+  border-color: #efb4ad;
+  color: var(--danger);
+}
+
 .command-box,
 .log-panel {
   width: 100%;
@@ -452,6 +557,7 @@ h3 {
 @media (max-width: 520px) {
   .output-section,
   .layout-section,
+  .status-section,
   .camera-section {
     padding: 16px;
   }
@@ -472,7 +578,16 @@ h3 {
   button,
   .layout-tools,
   .status-tools,
+  .input-health-row,
   .actions {
     width: 100%;
+  }
+
+  .input-health-row {
+    grid-template-columns: 1fr;
+  }
+
+  .input-health-side {
+    justify-items: start;
   }
 }

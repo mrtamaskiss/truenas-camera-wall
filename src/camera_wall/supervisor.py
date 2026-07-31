@@ -12,6 +12,8 @@ import time
 
 from .config import AppConfig, ConfigError, load_config
 from .ffmpeg import build_ffmpeg_command, mask_text, masked_command
+from .gpu import GpuMonitor
+from .input_health import InputHealthTracker
 from .log_buffer import install_log_buffer
 from .web import WebSettings, start_admin_server
 
@@ -37,43 +39,51 @@ class CameraWallSupervisor:
         self._runtime: dict[str, object] = {}
         self._restart_count = 0
         self._restart_delay_seconds = 5
+        self._gpu_monitor = GpuMonitor.from_env()
+        self._input_health = InputHealthTracker()
+        self._gpu_monitor.start()
 
     def run(self) -> int:
         logging.info("Starting camera wall supervisor with config %s", self.config_path)
         exit_code = 0
-        while not self.stop_requested.is_set():
-            self._consume_restart_request()
-            try:
-                config = load_config(self.config_path)
-                command = build_ffmpeg_command(config)
-                self._restart_delay_seconds = config.ffmpeg.restart_delay_seconds
-            except ConfigError as exc:
-                self._set_state(last_error=str(exc), last_command=None, runtime={})
-                logging.error("Configuration error: %s", exc)
-                self._sleep_or_wake(self._restart_delay_seconds)
-                continue
+        try:
+            while not self.stop_requested.is_set():
+                self._consume_restart_request()
+                try:
+                    config = load_config(self.config_path)
+                    self._input_health.configure(config)
+                    command = build_ffmpeg_command(config)
+                    self._restart_delay_seconds = config.ffmpeg.restart_delay_seconds
+                except ConfigError as exc:
+                    self._set_state(last_error=str(exc), last_command=None, runtime={})
+                    self._input_health.clear(str(exc))
+                    logging.error("Configuration error: %s", exc)
+                    self._sleep_or_wake(self._restart_delay_seconds)
+                    continue
 
-            rendered_command = masked_command(command)
-            self._set_state(
-                last_error=None,
-                last_command=rendered_command,
-                runtime=_runtime_summary(config),
-            )
-            logging.info("FFmpeg command: %s", rendered_command)
-            exit_code = self._run_once(command)
-            if self.stop_requested.is_set():
-                return exit_code
-            if self.restart_requested.is_set():
-                reason = self._consume_restart_request()
-                logging.info("Restarting FFmpeg after %s", reason or "request")
-                continue
-            logging.warning(
-                "FFmpeg exited with code %s; restarting in %s seconds",
-                exit_code,
-                self._restart_delay_seconds,
-            )
-            self._sleep_or_wake(self._restart_delay_seconds)
-        return exit_code
+                rendered_command = masked_command(command)
+                self._set_state(
+                    last_error=None,
+                    last_command=rendered_command,
+                    runtime=_runtime_summary(config),
+                )
+                logging.info("FFmpeg command: %s", rendered_command)
+                exit_code = self._run_once(command)
+                if self.stop_requested.is_set():
+                    return exit_code
+                if self.restart_requested.is_set():
+                    reason = self._consume_restart_request()
+                    logging.info("Restarting FFmpeg after %s", reason or "request")
+                    continue
+                logging.warning(
+                    "FFmpeg exited with code %s; restarting in %s seconds",
+                    exit_code,
+                    self._restart_delay_seconds,
+                )
+                self._sleep_or_wake(self._restart_delay_seconds)
+            return exit_code
+        finally:
+            self._gpu_monitor.stop()
 
     def request_restart(self, reason: str) -> None:
         with self._lock:
@@ -89,6 +99,7 @@ class CameraWallSupervisor:
         if process and process.poll() is None:
             logging.info("Stopping FFmpeg pid %s", process.pid)
             self._terminate_process(process)
+        self._gpu_monitor.stop()
 
     def status_snapshot(self) -> dict[str, object]:
         process = self._current_process
@@ -106,6 +117,8 @@ class CameraWallSupervisor:
                 "last_started_at": self._last_started_at,
                 "last_command": self._last_command,
                 "runtime": self._runtime,
+                "input_health": self._input_health.snapshot(),
+                "gpu": self._gpu_monitor.snapshot(),
             }
 
     def _run_once(self, command: list[str]) -> int:
@@ -123,23 +136,29 @@ class CameraWallSupervisor:
             )
             reader = threading.Thread(
                 target=_log_process_output,
-                args=(self._current_process,),
+                args=(self._current_process, self._input_health.process_ffmpeg_line),
                 name="ffmpeg-output",
                 daemon=True,
             )
             reader.start()
             PID_FILE.write_text(str(self._current_process.pid), encoding="utf-8")
             self._set_state(last_started_at=_utc_now(), last_exit_code=None)
+            self._input_health.mark_started()
             logging.info("FFmpeg started with pid %s", self._current_process.pid)
             while True:
                 exit_code = self._current_process.poll()
                 if exit_code is not None:
                     self._set_state(last_exit_code=exit_code)
+                    self._input_health.mark_stopped(exit_code)
                     return exit_code
                 if self.stop_requested.is_set() or self.restart_requested.is_set():
+                    requested_restart = self.restart_requested.is_set()
+                    self._input_health.mark_restarting()
                     self._terminate_process(self._current_process)
                     exit_code = self._current_process.wait()
                     self._set_state(last_exit_code=exit_code)
+                    if not requested_restart:
+                        self._input_health.mark_stopped(exit_code)
                     return exit_code
                 time.sleep(0.5)
         except FileNotFoundError:
@@ -329,10 +348,12 @@ def _runtime_summary(config: AppConfig) -> dict[str, object]:
     }
 
 
-def _log_process_output(process: subprocess.Popen[str]) -> None:
+def _log_process_output(process: subprocess.Popen[str], on_line: object | None = None) -> None:
     if not process.stdout:
         return
     for raw_line in process.stdout:
         line = raw_line.rstrip()
         if line:
+            if callable(on_line):
+                on_line(line)
             logging.warning("ffmpeg %s", mask_text(line))

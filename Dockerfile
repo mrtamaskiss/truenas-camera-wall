@@ -5,6 +5,7 @@ RUN apt-get update \
         ca-certificates \
         ffmpeg \
         fonts-dejavu-core \
+        intel-gpu-tools \
         intel-media-va-driver \
         libva-drm2 \
         python3 \

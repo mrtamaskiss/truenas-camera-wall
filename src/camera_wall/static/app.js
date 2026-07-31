@@ -245,8 +245,10 @@ function renderPreview() {
   const width = Math.max(1, Number(output.width) || 1);
   const height = Math.max(1, Number(output.height) || 1);
 
-  ensureInputs().forEach((camera) => {
-    const cell = element("div", `preview-cell${camera.enabled ? "" : " disabled"}`);
+  ensureInputs().forEach((camera, index) => {
+    const health = inputHealthFor(index, camera);
+    const healthClass = health ? ` ${healthStateClass(health.state)}` : "";
+    const cell = element("div", `preview-cell${camera.enabled ? "" : " disabled"}${healthClass}`);
     cell.style.left = `${clampPercent(camera.x, width)}%`;
     cell.style.top = `${clampPercent(camera.y, height)}%`;
     cell.style.width = `${clampPercent(camera.width, width)}%`;
@@ -271,6 +273,18 @@ function applyLayout(mode) {
       return;
     }
     assignCells(indexes, threeCells());
+  } else if (mode === "two-by-two") {
+    if (indexes.length !== 4) {
+      showToast("2x2 needs exactly 4 enabled cameras", true);
+      return;
+    }
+    assignCells(indexes, twoByTwoCells());
+  } else if (mode === "five") {
+    if (indexes.length !== 5) {
+      showToast("5 wall needs exactly 5 enabled cameras", true);
+      return;
+    }
+    assignCells(indexes, fiveCells());
   } else if (mode === "focus") {
     assignCells(indexes, focusCells(indexes.length));
   } else if (mode === "grid") {
@@ -293,6 +307,8 @@ function autoCells(count) {
     ];
   }
   if (count === 3) return threeCells();
+  if (count === 4) return twoByTwoCells();
+  if (count === 5) return fiveCells();
   return gridCells(count);
 }
 
@@ -327,6 +343,26 @@ function gridCells(count) {
       height: row === rows - 1 ? height - y : cellH,
     };
   });
+}
+
+function twoByTwoCells() {
+  return gridCells(4);
+}
+
+function fiveCells() {
+  const width = outputWidth();
+  const height = outputHeight();
+  const topH = Math.floor(height / 2);
+  const bottomH = height - topH;
+  const topW = Math.floor(width / 3);
+  const bottomW = Math.floor(width / 2);
+  return [
+    { x: 0, y: 0, width: topW, height: topH },
+    { x: topW, y: 0, width: topW, height: topH },
+    { x: topW * 2, y: 0, width: width - topW * 2, height: topH },
+    { x: 0, y: topH, width: bottomW, height: bottomH },
+    { x: bottomW, y: topH, width: width - bottomW, height: bottomH },
+  ];
 }
 
 function focusCells(count) {
@@ -579,6 +615,7 @@ function renderStatus(status) {
     return;
   }
   const runtime = status.runtime || {};
+  const gpu = status.gpu || {};
   const items = [
     ["State", status.ffmpeg_running ? "running" : status.last_error ? "config error" : "stopped"],
     ["PID", status.pid || "-"],
@@ -593,9 +630,20 @@ function renderStatus(status) {
     ["Bitrate", runtime.bitrate || "-"],
     ["Inputs", runtime.enabled_inputs ?? "-"],
   ];
+  if (gpu.enabled !== false) {
+    items.push(["GPU load", gpu.available ? formatPercent(gpu.load_percent) : "unavailable"]);
+    items.push(["GPU video", formatPercent(gpu.video_percent)]);
+    items.push(["GPU render", formatPercent(gpu.render_percent)]);
+    if (gpu.frequency_mhz !== null && gpu.frequency_mhz !== undefined) {
+      items.push(["GPU freq", `${gpu.frequency_mhz} MHz`]);
+    }
+    if (gpu.source) items.push(["GPU source", gpu.source]);
+  }
   if (status.restart_reason) items.push(["Restart reason", status.restart_reason]);
   if (status.last_error) items.push(["Last error", status.last_error]);
+  if (gpu.error) items.push(["GPU note", gpu.error]);
   items.forEach(([label, value]) => grid.append(statusCard(label, value)));
+  renderInputHealth(status.input_health || []);
   command.textContent = status.last_command || "No command yet";
 }
 
@@ -619,6 +667,52 @@ function renderLogs() {
     .map((item) => `${item.time} ${item.level.padEnd(7)} ${item.message}`)
     .join("\n");
   panel.scrollTop = panel.scrollHeight;
+}
+
+function renderInputHealth(items) {
+  const panel = $("inputHealthPanel");
+  panel.replaceChildren();
+  if (!items.length) {
+    panel.textContent = "No input health yet";
+    return;
+  }
+  items.forEach((item) => {
+    const row = element("div", `input-health-row ${healthStateClass(item.state)}`);
+    const main = element("div", "input-health-main");
+    const title = document.createElement("strong");
+    const detail = document.createElement("span");
+    title.textContent = item.label || item.name || `camera-${Number(item.index || 0) + 1}`;
+    detail.textContent = item.last_error || item.url || "-";
+    main.append(title, detail);
+
+    const side = element("div", "input-health-side");
+    const pill = element("span", `input-health-pill ${healthStateClass(item.state)}`);
+    pill.textContent = item.state || "unknown";
+    const seen = document.createElement("span");
+    seen.textContent = item.last_seen_at || "-";
+    side.append(pill, seen);
+
+    row.append(main, side);
+    panel.append(row);
+  });
+}
+
+function inputHealthFor(index, camera) {
+  const items = state.status?.input_health || [];
+  return items.find((item) => item.index === index || item.name === camera.name);
+}
+
+function healthStateClass(value) {
+  if (value === "active") return "ok";
+  if (value === "connecting" || value === "restarting") return "warn";
+  if (value === "failed" || value === "stopped") return "bad";
+  if (value === "disabled") return "disabled";
+  return "unknown";
+}
+
+function formatPercent(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  return `${Number(value).toFixed(1)}%`;
 }
 
 async function copyCommand() {

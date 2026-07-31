@@ -78,12 +78,13 @@ def build_ffmpeg_command(config: AppConfig) -> list[str]:
 
 def build_filter_graph(config: AppConfig) -> str:
     output = config.output
-    parts = [f"color=c=black:s={output.width}x{output.height}:r={output.fps},format=yuv420p[base]"]
+    parts = [f"color=c=black:s={output.width}x{output.height}:r={output.fps},format=yuv420p[base0]"]
+    base_label = _add_offline_placeholders(parts, config.enabled_inputs)
 
     for index, input_cfg in enumerate(config.enabled_inputs):
         parts.append(_input_filter(index, input_cfg, output.fps, config.ffmpeg.input_hwaccel))
 
-    last_label = "base"
+    last_label = base_label
     enabled_inputs = config.enabled_inputs
     for index, input_cfg in enumerate(enabled_inputs):
         next_label = f"tmp{index}" if index < len(enabled_inputs) - 1 else "wall_raw"
@@ -144,6 +145,24 @@ def _input_filter(index: int, input_cfg: InputConfig, fps: int, input_hwaccel: s
             "box=1:boxcolor=black@0.55:boxborderw=8"
         )
     return f"{chain}[v{index}]"
+
+
+def _add_offline_placeholders(parts: list[str], inputs: tuple[InputConfig, ...]) -> str:
+    last_label = "base0"
+    for index, input_cfg in enumerate(inputs):
+        next_label = f"base{index + 1}"
+        text = _escape_drawtext(f"{input_cfg.label or input_cfg.name} offline")
+        parts.append(
+            f"[{last_label}]drawtext="
+            f"text='{text}':"
+            f"x={input_cfg.x}+({input_cfg.width}-text_w)/2:"
+            f"y={input_cfg.y}+({input_cfg.height}-text_h)/2:"
+            "fontcolor=white@0.76:fontsize=30:"
+            "box=1:boxcolor=black@0.62:boxborderw=10"
+            f"[{next_label}]"
+        )
+        last_label = next_label
+    return last_label
 
 
 def _encoder_args(config: AppConfig) -> list[str]:

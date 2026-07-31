@@ -92,7 +92,9 @@ class FfmpegTests(unittest.TestCase):
     def test_filter_preserves_aspect_and_pads_first_layout(self) -> None:
         graph = build_filter_graph(make_config())
 
-        self.assertIn("color=c=black:s=1920x1080:r=15", graph)
+        self.assertIn("color=c=black:s=1920x1080:r=15,format=yuv420p[base0]", graph)
+        self.assertIn("drawtext=text='Camera 1 offline'", graph)
+        self.assertIn("x=0+(960-text_w)/2:y=0+(540-text_h)/2", graph)
         self.assertIn("scale=w=960:h=540:force_original_aspect_ratio=decrease", graph)
         self.assertIn("pad=w=960:h=540:x=(ow-iw)/2:y=(oh-ih)/2:color=black", graph)
         self.assertIn("overlay=x=960:y=0", graph)

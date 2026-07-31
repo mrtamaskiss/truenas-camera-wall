@@ -8,11 +8,13 @@ It reads multiple RTSP or HTTP camera inputs, renders them into one H.264 wall s
 
 - `camera_wall.config` loads YAML, resolves environment variables and Docker secrets, and validates the wall layout.
 - `camera_wall.ffmpeg` builds one FFmpeg command with a generated `filter_complex` graph.
+- `camera_wall.input_health` tracks enabled, disabled, active, restarting, and failed camera states for the admin UI.
+- `camera_wall.gpu` samples Intel GPU utilization with `intel_gpu_top` when the host exposes the required counters.
 - `camera_wall.supervisor` starts FFmpeg, logs a credential-masked command, and restarts the pipeline when FFmpeg exits or the admin UI applies a new config.
 - `camera_wall.web` serves the admin UI and writes the private YAML config mounted at `/config/config.yaml`.
 - Docker healthcheck reports healthy only while the supervised FFmpeg process is alive.
 
-The wall uses a black 1920x1080 canvas by default. Each enabled input is scaled with `force_original_aspect_ratio=decrease`, padded to its configured cell, and overlaid at its configured position. Inputs are never stretched unless `preserve_aspect: false` is explicitly set.
+The wall uses a black 1920x1080 canvas by default. Each enabled input is scaled with `force_original_aspect_ratio=decrease`, padded to its configured cell, and overlaid at its configured position. Inputs are never stretched unless `preserve_aspect: false` is explicitly set. Each tile has a black offline placeholder under the live camera layer.
 
 ## Default Layout
 
@@ -79,12 +81,12 @@ The admin UI can edit:
 - RTSP or HTTP camera URLs
 - camera names, labels, enabled state, and cell positions
 - output URL, resolution, FPS, bitrate, encoder, input decode, VAAPI/QSV options
-- layout templates: auto, 3 wall, grid, focus
-- current status, recent logs, masked FFmpeg command, and config download
+- layout templates: auto, 3 wall, 2x2, 5 wall, grid, focus
+- current status, per-camera input health, Intel GPU load, recent logs, masked FFmpeg command, and config download
 
 Saving in the UI validates the full config, writes `/config/config.yaml`, and restarts only the supervised FFmpeg process. If your current config uses `${CAMERA_1_URL}` style environment variables, saving from the UI writes the resolved URL into the private config file.
 
-The Status panel shows the supervised FFmpeg process state, PID, restart count, encoder, input decode mode, output URL, the masked generated FFmpeg command, and an in-memory log tail. Set `CAMERA_WALL_LOG_BUFFER_LINES` to change the retained log line count.
+The Status panel shows the supervised FFmpeg process state, PID, restart count, encoder, input decode mode, output URL, per-camera input health, GPU load when available, the masked generated FFmpeg command, and an in-memory log tail. Set `CAMERA_WALL_LOG_BUFFER_LINES` to change the retained log line count.
 
 ## Encoder Selection
 
@@ -112,6 +114,26 @@ VAAPI decode -> CPU scale/pad/overlay/drawtext -> VAAPI encode
 ```
 
 If a camera codec or driver rejects VAAPI decode, set `CAMERA_WALL_INPUT_HWACCEL: software` and apply again.
+
+## GPU Metrics
+
+The image includes `intel_gpu_top` through the `intel-gpu-tools` package. When `/dev/dri` and the required Intel PMU/perf counters are available inside the container, the Status panel shows:
+
+- total GPU load
+- video engine load
+- render engine load
+- blitter/copy load
+- current GPU frequency when reported
+
+Environment variables:
+
+```text
+CAMERA_WALL_GPU_STATS_ENABLED=true
+CAMERA_WALL_GPU_DEVICE=/dev/dri/renderD128
+CAMERA_WALL_GPU_SAMPLE_SECONDS=5
+```
+
+If GPU load shows `unavailable`, video processing can still be using VAAPI. It usually means the container cannot read Intel performance counters. Depending on the TrueNAS host and kernel settings, `intel_gpu_top` may need root-equivalent container permissions, `CAP_PERFMON`, `CAP_SYS_ADMIN`, or a lower host `perf_event_paranoid` value.
 
 ## Credentials
 
@@ -163,8 +185,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.4.1 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.4.1
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.5.0 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.5.0
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -205,7 +227,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.4.1
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.5.0
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host
@@ -217,6 +239,9 @@ services:
       CAMERA_WALL_ADMIN_USER: admin
       CAMERA_WALL_ADMIN_PASSWORD: change-this-password
       CAMERA_WALL_LOG_BUFFER_LINES: "500"
+      CAMERA_WALL_GPU_STATS_ENABLED: "true"
+      CAMERA_WALL_GPU_DEVICE: /dev/dri/renderD128
+      CAMERA_WALL_GPU_SAMPLE_SECONDS: "5"
       OUTPUT_URL: rtsp://192.168.64.10:8554/camera_wall
       CAMERA_WALL_BITRATE: 5M
       CAMERA_WALL_ENCODER: vaapi
@@ -233,6 +258,8 @@ services:
 ```
 
 Use `CAMERA_WALL_ENCODER: vaapi` or `CAMERA_WALL_ENCODER: qsv` in the environment block.
+
+If the Status panel shows GPU load as unavailable but VAAPI encode works, enable privileged mode in the TrueNAS custom app or add the equivalent perf counter capability settings if your TrueNAS UI exposes them. Keep the app LAN-only when using elevated container permissions.
 
 If you use the guided Custom App wizard instead of YAML, set the same image, environment variables, writable config mount, restart policy, host networking or equivalent port access, and GPU passthrough. TrueNAS shows non-NVIDIA GPU passthrough under the app resource settings when hardware is detected.
 
@@ -258,8 +285,10 @@ ffplay rtsp://192.168.64.10:8554/camera_wall
 - Browser compatibility is simplest with H.264 video. This app encodes `yuv420p` for software mode and `nv12` for hardware encoders.
 - RTSP input is forced to TCP by default for camera stability.
 - FFmpeg reconnect options are strongest for HTTP inputs. For RTSP, the supervisor restarts the whole pipeline after FFmpeg exits. `ffmpeg.input_timeout_seconds` is disabled by default because some FFmpeg builds reject `-rw_timeout`.
+- Per-camera input health is best-effort with the current single FFmpeg process. Startup failure of one RTSP input can still restart the whole wall; the offline tile placeholder is visible when FFmpeg can keep the wall graph alive without that overlay.
 - VAAPI uses CQP by default for broad Intel driver compatibility. In this mode `output.bitrate` is only a soft configuration value for non-VAAPI encoders; use `output.vaapi_qp` to tune VAAPI quality.
 - VAAPI input decode can lower CPU use, but it still downloads frames before the CPU filter graph. It is intentionally optional because camera codecs and Intel driver support vary.
+- GPU load is sampled with `intel_gpu_top`; unsupported metrics or missing perf counter permissions are reported as unavailable instead of failing the service.
 - Hardware acceleration depends on the host kernel, `/dev/dri`, driver support, and the FFmpeg build. Use `software` as the baseline.
 
 ## References
@@ -268,6 +297,7 @@ ffplay rtsp://192.168.64.10:8554/camera_wall
 - go2rtc streaming ingest and codecs: https://go2rtc.org/
 - go2rtc streams examples: https://go2rtc.org/internal/streams/
 - go2rtc hardware notes: https://go2rtc.org/internal/ffmpeg/hardware/
+- intel_gpu_top manual: https://manpages.debian.org/bookworm/intel-gpu-tools/intel_gpu_top.1.en.html
 
 ## Development
 
