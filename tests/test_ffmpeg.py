@@ -98,6 +98,7 @@ class FfmpegTests(unittest.TestCase):
         self.assertIn("scale=w=960:h=540:force_original_aspect_ratio=decrease", graph)
         self.assertIn("pad=w=960:h=540:x=(ow-iw)/2:y=(oh-ih)/2:color=black", graph)
         self.assertIn("overlay=x=960:y=0", graph)
+        self.assertIn("repeatlast=1", graph)
         self.assertIn("overlay=x=0:y=540", graph)
         self.assertIn("[wall_raw]format=yuv420p[wall]", graph)
 
@@ -139,6 +140,43 @@ class FfmpegTests(unittest.TestCase):
 
         self.assertIn("-rw_timeout", command)
         self.assertEqual(command[command.index("-rw_timeout") + 1], "15000000")
+
+    def test_stable_workers_use_low_latency_input_flags(self) -> None:
+        config = parse_config(
+            {
+                "output": {
+                    "url": "rtsp://192.168.64.10:8554/camera_wall",
+                    "width": 1920,
+                    "height": 1080,
+                    "fps": 15,
+                    "bitrate": "5M",
+                    "encoder": "software",
+                },
+                "workers": {
+                    "enabled": True,
+                    "mode": "stable",
+                    "slot_transport": "udp_mpegts",
+                },
+                "inputs": [
+                    {
+                        "name": "slot-1",
+                        "enabled": True,
+                        "url": "udp://127.0.0.1:15000?fifo_size=1024&overrun_nonfatal=1",
+                        "x": 0,
+                        "y": 0,
+                        "width": 960,
+                        "height": 540,
+                    }
+                ],
+            }
+        )
+        command = build_ffmpeg_command(config)
+
+        self.assertIn("+genpts+nobuffer", command)
+        self.assertIn("-flags", command)
+        self.assertIn("low_delay", command)
+        self.assertIn("-flush_packets", command)
+        self.assertEqual(command[command.index("-flush_packets") + 1], "1")
 
     def test_vaapi_encoder_args(self) -> None:
         command = build_ffmpeg_command(make_config("vaapi"))

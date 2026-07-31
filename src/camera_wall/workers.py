@@ -602,7 +602,7 @@ def worker_wall_input_url(
                 parsed.scheme,
                 parsed.netloc,
                 parsed.path,
-                "fifo_size=5000000&overrun_nonfatal=1",
+                f"fifo_size={config.workers.udp_fifo_size}&overrun_nonfatal=1",
                 parsed.fragment,
             )
         )

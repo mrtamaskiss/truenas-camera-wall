@@ -44,6 +44,8 @@ class SlotWorkerTests(unittest.TestCase):
 
         self.assertIn("-rtsp_transport", command)
         self.assertIn("tcp", command)
+        self.assertIn("+genpts+nobuffer", command)
+        self.assertIn("low_delay", command)
         self.assertIn("-vf", command)
         filter_graph = command[command.index("-vf") + 1]
         self.assertIn("scale=w=960:h=540:force_original_aspect_ratio=decrease", filter_graph)
@@ -55,6 +57,9 @@ class SlotWorkerTests(unittest.TestCase):
 
         self.assertIn("libx264", command)
         self.assertIn("repeat-headers=1:scenecut=0", command)
+        self.assertIn("-bf", command)
+        self.assertEqual(command[command.index("-bf") + 1], "0")
+        self.assertIn("-flush_packets", command)
         self.assertIn("-f", command)
         self.assertEqual(command[command.index("-f", command.index("-x264-params")) + 1], "mpegts")
         self.assertEqual(command[-1], "udp://127.0.0.1:15000?pkt_size=1316")

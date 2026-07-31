@@ -41,7 +41,18 @@ def build_ffmpeg_command(
 
     timeout_us = str(ffmpeg.input_timeout_seconds * 1_000_000)
     for input_cfg in inputs:
-        args.extend(["-thread_queue_size", "512", "-fflags", "+genpts"])
+        args.extend(["-thread_queue_size", "512", "-fflags", _input_fflags(config)])
+        if _low_latency_inputs(config):
+            args.extend(
+                [
+                    "-flags",
+                    "low_delay",
+                    "-probesize",
+                    "32768",
+                    "-analyzeduration",
+                    "1000000",
+                ]
+            )
         if ffmpeg.input_hwaccel == "vaapi":
             args.extend(
                 [
@@ -74,7 +85,7 @@ def build_ffmpeg_command(
     args.extend(["-filter_complex", filter_graph, "-map", "[wall]", "-an"])
     args.extend(_encoder_args(config))
     args.extend(["-r", str(output.fps), "-f", "rtsp", "-rtsp_transport", output.rtsp_transport])
-    args.extend(["-muxdelay", "0.1", output.url])
+    args.extend(["-muxdelay", "0", "-flush_packets", "1", output.url])
     return args
 
 
@@ -231,6 +242,16 @@ def _double_bitrate(value: str) -> str:
         return value
     amount, suffix = match.groups()
     return f"{int(amount) * 2}{suffix}"
+
+
+def _input_fflags(config: AppConfig) -> str:
+    if _low_latency_inputs(config):
+        return "+genpts+nobuffer"
+    return "+genpts"
+
+
+def _low_latency_inputs(config: AppConfig) -> bool:
+    return config.workers.enabled and config.workers.mode == "stable"
 
 
 def _is_rtsp_url(value: str) -> bool:

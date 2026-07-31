@@ -66,6 +66,7 @@ class WorkerConfig:
     output_template: str = ""
     wall_input_template: str = ""
     udp_base_port: int = 15000
+    udp_fifo_size: int = 1024
     rtsp_transport: str = "tcp"
     fallback_enabled: bool = True
     restart_delay_seconds: int = 5
@@ -188,6 +189,12 @@ def parse_config(raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -
                 workers_raw.get("udp_base_port", 15000), "workers.udp_base_port", env
             ),
             "workers.udp_base_port",
+        ),
+        udp_fifo_size=_positive_int(
+            _resolved_maybe_int(
+                workers_raw.get("udp_fifo_size", 1024), "workers.udp_fifo_size", env
+            ),
+            "workers.udp_fifo_size",
         ),
         rtsp_transport=_transport(
             workers_raw.get("rtsp_transport", "tcp"), "workers.rtsp_transport"

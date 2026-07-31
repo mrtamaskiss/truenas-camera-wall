@@ -234,6 +234,9 @@ function renderOutput() {
     numberField("UDP base port", workers.udp_base_port ?? 15000, (value) =>
       setWorkers("udp_base_port", value)
     ),
+    numberField("UDP FIFO", workers.udp_fifo_size ?? 1024, (value) =>
+      setWorkers("udp_fifo_size", value)
+    ),
     selectField(
       "Worker RTSP",
       workers.rtsp_transport || "tcp",
@@ -536,6 +539,7 @@ function ensureWorkers() {
     output_template: "",
     wall_input_template: "",
     udp_base_port: 15000,
+    udp_fifo_size: 1024,
     rtsp_transport: "tcp",
     fallback_enabled: true,
     restart_delay_seconds: 5,

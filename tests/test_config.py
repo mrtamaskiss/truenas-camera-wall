@@ -182,6 +182,7 @@ class ConfigTests(unittest.TestCase):
                 "output_template": "${WORKER_TEMPLATE}",
                 "wall_input_template": "udp://127.0.0.1:1600{index}?fifo_size=1000",
                 "udp_base_port": 15100,
+                "udp_fifo_size": 2048,
                 "rtsp_transport": "tcp",
                 "fallback_enabled": True,
                 "restart_delay_seconds": 7,
@@ -209,6 +210,7 @@ class ConfigTests(unittest.TestCase):
             "udp://127.0.0.1:1600{index}?fifo_size=1000",
         )
         self.assertEqual(config.workers.udp_base_port, 15100)
+        self.assertEqual(config.workers.udp_fifo_size, 2048)
         self.assertEqual(config.workers.restart_delay_seconds, 7)
         self.assertEqual(config.workers.retry_live_seconds, 17)
         self.assertEqual(config.workers.retry_probe_timeout_seconds, 4)

@@ -322,7 +322,13 @@ def build_decoder_command(settings: SlotSettings) -> list[str]:
         "-thread_queue_size",
         "512",
         "-fflags",
-        "+genpts",
+        "+genpts+nobuffer",
+        "-flags",
+        "low_delay",
+        "-probesize",
+        "32768",
+        "-analyzeduration",
+        "1000000",
     ]
     if settings.input_hwaccel == "vaapi":
         args.extend(
@@ -407,6 +413,8 @@ def build_encoder_command(settings: SlotSettings) -> list[str]:
         str(settings.fps * 2),
         "-keyint_min",
         str(settings.fps),
+        "-bf",
+        "0",
         "-sc_threshold",
         "0",
         "-x264-params",
@@ -591,14 +599,16 @@ def _live_video_filter(settings: SlotSettings) -> str:
 
 def _worker_output_args(settings: SlotSettings) -> list[str]:
     if settings.slot_transport == "udp_mpegts":
-        return ["-f", "mpegts", "-muxdelay", "0", settings.output_url]
+        return ["-f", "mpegts", "-muxdelay", "0", "-flush_packets", "1", settings.output_url]
     return [
         "-f",
         "rtsp",
         "-rtsp_transport",
         settings.worker_rtsp_transport,
         "-muxdelay",
-        "0.1",
+        "0",
+        "-flush_packets",
+        "1",
         settings.output_url,
     ]
 

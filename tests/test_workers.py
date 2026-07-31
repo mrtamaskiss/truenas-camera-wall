@@ -115,7 +115,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(slots[0].output_url, "udp://127.0.0.1:15100?pkt_size=1316")
         self.assertEqual(
             slots[0].wall_input_url,
-            "udp://127.0.0.1:15100?fifo_size=5000000&overrun_nonfatal=1",
+            "udp://127.0.0.1:15100?fifo_size=1024&overrun_nonfatal=1",
         )
         self.assertIn("-f", slots[0].command)
         self.assertEqual(slots[0].command[slots[0].command.index("-f") + 1], "mpegts")
