@@ -252,7 +252,10 @@ function renderOutput() {
     numberField("Live retry", workers.retry_live_seconds ?? 15, (value) =>
       setWorkers("retry_live_seconds", value)
     ),
-    numberField("Stall timeout", workers.stall_timeout_seconds ?? 20, (value) =>
+    numberField("Probe timeout", workers.retry_probe_timeout_seconds ?? 3, (value) =>
+      setWorkers("retry_probe_timeout_seconds", value)
+    ),
+    numberField("Stall timeout", workers.stall_timeout_seconds ?? 3, (value) =>
       setWorkers("stall_timeout_seconds", value)
     ),
     checkField("Preflight worker URLs", workers.wall_input_preflight, (value) =>
@@ -535,7 +538,8 @@ function ensureWorkers() {
     restart_delay_seconds: 5,
     start_grace_seconds: 2,
     retry_live_seconds: 15,
-    stall_timeout_seconds: 20,
+    retry_probe_timeout_seconds: 3,
+    stall_timeout_seconds: 3,
     wall_input_preflight: false,
   };
   return state.config.workers;

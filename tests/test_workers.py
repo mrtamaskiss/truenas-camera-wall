@@ -1,7 +1,10 @@
 import unittest
+from unittest.mock import Mock, patch
 
 from camera_wall.config import parse_config
 from camera_wall.workers import (
+    RemuxWorkerManager,
+    _WorkerRuntime,
     build_remux_slots,
     build_remux_worker_command,
     build_worker_wall_config,
@@ -19,7 +22,8 @@ def make_config(worker_overrides: dict | None = None):
         "restart_delay_seconds": 5,
         "start_grace_seconds": 2,
         "retry_live_seconds": 15,
-        "stall_timeout_seconds": 20,
+        "retry_probe_timeout_seconds": 3,
+        "stall_timeout_seconds": 3,
         "wall_input_preflight": False,
     }
     if worker_overrides:
@@ -157,6 +161,32 @@ class WorkerTests(unittest.TestCase):
 
         self.assertEqual([slot.name for slot in slots], ["camera-1", "Back Yard"])
         self.assertTrue(all("-c:v" in slot.command for slot in slots))
+
+    def test_fallback_retry_keeps_fallback_running_when_probe_fails(self) -> None:
+        config = make_config({"slot_transport": "udp_mpegts"})
+        slot = build_remux_slots(config)[0]
+        manager = RemuxWorkerManager()
+        worker = _WorkerRuntime(slot=slot, restart_delay_seconds=5)
+        worker.process_kind = "fallback"
+        worker.next_live_retry_at = 1
+        worker.process = Mock()
+        worker.process.poll.return_value = None
+
+        with (
+            patch(
+                "camera_wall.workers.diagnose_stream",
+                return_value={"ok": False, "message": "Connection timed out"},
+            ) as probe,
+            patch.object(manager, "_stop_process") as stop_process,
+            patch.object(manager, "_start_live") as start_live,
+        ):
+            manager._retry_live_from_fallback(worker, now=10)
+
+        probe.assert_called_once()
+        stop_process.assert_not_called()
+        start_live.assert_not_called()
+        self.assertGreater(worker.next_live_retry_at, 10)
+        self.assertEqual(worker.process_kind, "fallback")
 
 
 if __name__ == "__main__":

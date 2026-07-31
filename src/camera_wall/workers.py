@@ -10,6 +10,7 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 
 from .config import AppConfig, InputConfig
+from .diagnostics import StreamProbeRequest, diagnose_stream
 from .ffmpeg import mask_text, mask_url, masked_command
 
 
@@ -22,7 +23,9 @@ class RemuxSlot:
     command: list[str]
     fallback_command: list[str] | None = None
     retry_live_seconds: int = 15
-    stall_timeout_seconds: int = 20
+    retry_probe_timeout_seconds: int = 3
+    stall_timeout_seconds: int = 3
+    input_rtsp_transport: str = "tcp"
 
     @property
     def name(self) -> str:
@@ -98,9 +101,7 @@ class RemuxWorkerManager:
                         self._stop_process(worker, kill=True)
                         self._handle_exit(worker, -9, now)
                     elif self._should_retry_live(worker, now):
-                        logging.info("Worker %s retrying live camera input", worker.slot.name)
-                        self._stop_process(worker)
-                        self._start_live(worker)
+                        self._retry_live_from_fallback(worker, now)
                     continue
                 self._handle_exit(worker, exit_code, now)
                 continue
@@ -316,6 +317,32 @@ class RemuxWorkerManager:
     def _retry_live_seconds(self, worker: _WorkerRuntime) -> int:
         return max(1, worker.slot.retry_live_seconds)
 
+    def _retry_live_from_fallback(self, worker: _WorkerRuntime, now: float) -> None:
+        result = self._probe_live(worker)
+        if not result.get("ok"):
+            with self._lock:
+                worker.next_live_retry_at = now + self._retry_live_seconds(worker)
+                worker.last_error = str(result.get("message") or "Live probe failed")
+            logging.info(
+                "Worker %s live probe failed while fallback stays active: %s",
+                worker.slot.name,
+                result.get("message") or "Live probe failed",
+            )
+            return
+
+        logging.info("Worker %s live probe succeeded; switching from fallback", worker.slot.name)
+        self._stop_process(worker)
+        self._start_live(worker)
+
+    def _probe_live(self, worker: _WorkerRuntime) -> dict[str, object]:
+        request = StreamProbeRequest(
+            url=worker.slot.input_cfg.url,
+            name=worker.slot.name,
+            rtsp_transport=worker.slot.input_rtsp_transport,
+            timeout_seconds=worker.slot.retry_probe_timeout_seconds,
+        )
+        return diagnose_stream(request)
+
     def _worker(self, name: str) -> _WorkerRuntime | None:
         with self._lock:
             return self._workers.get(name)
@@ -346,7 +373,9 @@ def build_remux_slots(config: AppConfig) -> tuple[RemuxSlot, ...]:
                 if config.workers.fallback_enabled
                 else None,
                 retry_live_seconds=config.workers.retry_live_seconds,
+                retry_probe_timeout_seconds=config.workers.retry_probe_timeout_seconds,
                 stall_timeout_seconds=config.workers.stall_timeout_seconds,
+                input_rtsp_transport=config.ffmpeg.input_rtsp_transport,
             )
         )
     return tuple(slots)

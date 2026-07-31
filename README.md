@@ -146,7 +146,7 @@ For better camera-failure isolation, use `slot_transport: udp_mpegts` instead of
 camera -> per-camera FFmpeg worker with -c:v copy -> local UDP/MPEG-TS slot -> wall FFmpeg -> go2rtc camera_wall
 ```
 
-When a live worker exits or stops producing progress, the supervisor starts a low-bitrate black fallback stream on the same UDP port. The wall may briefly freeze that tile while the slot switches, but the RTSP subscriber session between go2rtc and the wall input is removed from the middle, so one failed camera is much less likely to take down the whole wall.
+When a live worker exits or stops producing progress, the supervisor starts a low-bitrate black fallback stream on the same UDP port. While fallback is active, the supervisor probes the real camera URL without stopping fallback, and switches back only after a successful probe. The wall may briefly freeze that tile while the slot switches, but the RTSP subscriber session between go2rtc and the wall input is removed from the middle, so one failed camera is much less likely to take down the whole wall.
 
 Enable it in YAML or from the admin UI:
 
@@ -163,7 +163,8 @@ workers:
   restart_delay_seconds: 5
   start_grace_seconds: 2
   retry_live_seconds: 15
-  stall_timeout_seconds: 20
+  retry_probe_timeout_seconds: 3
+  stall_timeout_seconds: 3
   wall_input_preflight: false
 ```
 
@@ -293,8 +294,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.9.0 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.9.0
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.10.0 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.10.0
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -337,7 +338,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.9.0
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.10.0
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host

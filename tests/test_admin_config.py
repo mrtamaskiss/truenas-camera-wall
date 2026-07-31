@@ -50,7 +50,8 @@ def valid_admin_config(count: int = 3):
             "restart_delay_seconds": 5,
             "start_grace_seconds": 2,
             "retry_live_seconds": 15,
-            "stall_timeout_seconds": 20,
+            "retry_probe_timeout_seconds": 3,
+            "stall_timeout_seconds": 3,
             "wall_input_preflight": False,
         },
         "inputs": [

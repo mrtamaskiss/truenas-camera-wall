@@ -187,6 +187,7 @@ class ConfigTests(unittest.TestCase):
                 "restart_delay_seconds": 7,
                 "start_grace_seconds": 1,
                 "retry_live_seconds": 17,
+                "retry_probe_timeout_seconds": 4,
                 "stall_timeout_seconds": 21,
                 "wall_input_preflight": True,
             },
@@ -210,6 +211,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.workers.udp_base_port, 15100)
         self.assertEqual(config.workers.restart_delay_seconds, 7)
         self.assertEqual(config.workers.retry_live_seconds, 17)
+        self.assertEqual(config.workers.retry_probe_timeout_seconds, 4)
         self.assertEqual(config.workers.stall_timeout_seconds, 21)
         self.assertTrue(config.workers.wall_input_preflight)
 
