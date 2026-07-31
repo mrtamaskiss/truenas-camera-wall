@@ -681,6 +681,7 @@ function updateConfigState(valid, error) {
 function updateStatus(status) {
   if (!status) return;
   state.status = status;
+  updateVersionState(status.version);
   if (status.ffmpeg_running) {
     updateFfmpegState(`Running ${status.pid}`, "ok");
   } else if (status.last_error) {
@@ -691,6 +692,13 @@ function updateStatus(status) {
     updateFfmpegState("Stopped", "warn");
   }
   renderStatus(status);
+}
+
+function updateVersionState(version) {
+  const pill = $("versionState");
+  if (!pill) return;
+  pill.textContent = version ? `v${version}` : "Version unknown";
+  pill.className = "state-pill";
 }
 
 function updateFfmpegState(text, className) {
@@ -719,6 +727,7 @@ function renderStatus(status) {
   const runtime = status.runtime || {};
   const gpu = status.gpu || {};
   const items = [
+    ["Version", status.version || "-"],
     ["State", status.ffmpeg_running ? "running" : status.last_error ? "config error" : "stopped"],
     ["PID", status.pid || "-"],
     ["Restarts", status.restart_count ?? 0],

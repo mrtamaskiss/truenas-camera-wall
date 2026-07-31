@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 
+from . import __version__
 from .config import AppConfig, ConfigError, InputConfig, load_config
 from .diagnostics import StreamProbeRequest, diagnose_stream
 from .ffmpeg import build_ffmpeg_command, mask_text, masked_command
@@ -145,6 +146,7 @@ class CameraWallSupervisor:
         ffmpeg_running = bool(process and process.poll() is None)
         with self._lock:
             return {
+                "version": __version__,
                 "config_path": str(self.config_path),
                 "ffmpeg_running": ffmpeg_running,
                 "pid": process.pid if ffmpeg_running and process else None,

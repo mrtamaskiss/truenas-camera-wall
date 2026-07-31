@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from camera_wall import __version__
 from camera_wall.config import parse_config
 from camera_wall.supervisor import CameraWallSupervisor, _runtime_summary
 
@@ -82,6 +83,17 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(active, {"camera-1"})
         self.assertEqual(failures, {"camera-2": "Connection timed out"})
         supervisor.stop()
+
+    @patch.dict("os.environ", {"CAMERA_WALL_GPU_STATS_ENABLED": "false"})
+    def test_status_snapshot_includes_app_version(self) -> None:
+        supervisor = CameraWallSupervisor("/tmp/config.yaml")
+
+        try:
+            snapshot = supervisor.status_snapshot()
+        finally:
+            supervisor.stop()
+
+        self.assertEqual(snapshot["version"], __version__)
 
     def test_runtime_summary_counts_active_and_offline_inputs(self) -> None:
         summary = _runtime_summary(make_config(), {"camera-1"}, True)

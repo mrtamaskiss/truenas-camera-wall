@@ -294,8 +294,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.10.0 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.10.0
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.10.1 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.10.1
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -338,7 +338,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.10.0
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.10.1
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host
