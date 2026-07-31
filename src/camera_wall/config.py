@@ -62,10 +62,16 @@ class FfmpegConfig:
 class WorkerConfig:
     enabled: bool = False
     mode: str = "remux"
+    slot_transport: str = "rtsp"
     output_template: str = ""
+    wall_input_template: str = ""
+    udp_base_port: int = 15000
     rtsp_transport: str = "tcp"
+    fallback_enabled: bool = True
     restart_delay_seconds: int = 5
     start_grace_seconds: int = 2
+    retry_live_seconds: int = 15
+    stall_timeout_seconds: int = 20
     wall_input_preflight: bool = False
 
 
@@ -165,17 +171,40 @@ def parse_config(raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -
         mode=_worker_mode(
             _resolved_string(workers_raw.get("mode", "remux"), "workers.mode", env)
         ),
+        slot_transport=_slot_transport(
+            _resolved_string(
+                workers_raw.get("slot_transport", "rtsp"), "workers.slot_transport", env
+            )
+        ),
         output_template=_resolved_string(
             workers_raw.get("output_template", ""), "workers.output_template", env
         ),
+        wall_input_template=_resolved_string(
+            workers_raw.get("wall_input_template", ""), "workers.wall_input_template", env
+        ),
+        udp_base_port=_port_int(
+            _resolved_maybe_int(
+                workers_raw.get("udp_base_port", 15000), "workers.udp_base_port", env
+            ),
+            "workers.udp_base_port",
+        ),
         rtsp_transport=_transport(
             workers_raw.get("rtsp_transport", "tcp"), "workers.rtsp_transport"
+        ),
+        fallback_enabled=_bool(
+            workers_raw.get("fallback_enabled", True), "workers.fallback_enabled"
         ),
         restart_delay_seconds=_positive_int(
             workers_raw.get("restart_delay_seconds", 5), "workers.restart_delay_seconds"
         ),
         start_grace_seconds=_nonnegative_int(
             workers_raw.get("start_grace_seconds", 2), "workers.start_grace_seconds"
+        ),
+        retry_live_seconds=_positive_int(
+            workers_raw.get("retry_live_seconds", 15), "workers.retry_live_seconds"
+        ),
+        stall_timeout_seconds=_nonnegative_int(
+            workers_raw.get("stall_timeout_seconds", 20), "workers.stall_timeout_seconds"
         ),
         wall_input_preflight=_bool(
             workers_raw.get("wall_input_preflight", False), "workers.wall_input_preflight"
@@ -187,6 +216,7 @@ def parse_config(raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -
     if not enabled:
         raise ConfigError("At least one input must be enabled")
     _validate_unique_names(inputs)
+    _validate_worker_config(workers, enabled)
     return AppConfig(output=output, inputs=inputs, ffmpeg=ffmpeg, workers=workers)
 
 
@@ -338,6 +368,12 @@ def _qp_int(value: Any, name: str) -> int:
     return value
 
 
+def _port_int(value: Any, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1 or value > 65535:
+        raise ConfigError(f"{name} must be an integer between 1 and 65535")
+    return value
+
+
 def _encoder(value: Any) -> str:
     encoder = _string(value, "output.encoder").lower()
     if encoder not in {"software", "vaapi", "qsv"}:
@@ -366,6 +402,13 @@ def _worker_mode(value: Any) -> str:
     return mode
 
 
+def _slot_transport(value: Any) -> str:
+    slot_transport = _string(value, "workers.slot_transport").lower()
+    if slot_transport not in {"rtsp", "udp_mpegts"}:
+        raise ConfigError("workers.slot_transport must be rtsp or udp_mpegts")
+    return slot_transport
+
+
 def _transport(value: Any, name: str) -> str:
     transport = _string(value, name).lower()
     if transport not in {"tcp", "udp"}:
@@ -386,3 +429,13 @@ def _validate_unique_names(inputs: tuple[InputConfig, ...]) -> None:
         if item.name in seen:
             raise ConfigError(f"Duplicate input name: {item.name}")
         seen.add(item.name)
+
+
+def _validate_worker_config(
+    workers: WorkerConfig, enabled_inputs: tuple[InputConfig, ...]
+) -> None:
+    if not workers.enabled or workers.slot_transport != "udp_mpegts" or workers.output_template:
+        return
+    max_port = workers.udp_base_port + max(0, len(enabled_inputs) - 1)
+    if max_port > 65535:
+        raise ConfigError("workers.udp_base_port plus enabled input count exceeds 65535")

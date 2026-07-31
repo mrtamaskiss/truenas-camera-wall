@@ -178,10 +178,16 @@ class ConfigTests(unittest.TestCase):
             "workers": {
                 "enabled": True,
                 "mode": "remux",
+                "slot_transport": "udp_mpegts",
                 "output_template": "${WORKER_TEMPLATE}",
+                "wall_input_template": "udp://127.0.0.1:1600{index}?fifo_size=1000",
+                "udp_base_port": 15100,
                 "rtsp_transport": "tcp",
+                "fallback_enabled": True,
                 "restart_delay_seconds": 7,
                 "start_grace_seconds": 1,
+                "retry_live_seconds": 17,
+                "stall_timeout_seconds": 21,
                 "wall_input_preflight": True,
             },
         }
@@ -195,8 +201,16 @@ class ConfigTests(unittest.TestCase):
         )
 
         self.assertTrue(config.workers.enabled)
+        self.assertEqual(config.workers.slot_transport, "udp_mpegts")
         self.assertEqual(config.workers.output_template, "rtsp://go2rtc:8554/wall_{name}")
+        self.assertEqual(
+            config.workers.wall_input_template,
+            "udp://127.0.0.1:1600{index}?fifo_size=1000",
+        )
+        self.assertEqual(config.workers.udp_base_port, 15100)
         self.assertEqual(config.workers.restart_delay_seconds, 7)
+        self.assertEqual(config.workers.retry_live_seconds, 17)
+        self.assertEqual(config.workers.stall_timeout_seconds, 21)
         self.assertTrue(config.workers.wall_input_preflight)
 
     def test_rejects_invalid_worker_mode(self) -> None:
@@ -206,6 +220,51 @@ class ConfigTests(unittest.TestCase):
                 "enabled": True,
                 "mode": "transcode",
             },
+        }
+
+        with self.assertRaises(ConfigError):
+            parse_config(
+                raw,
+                {
+                    "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                    "CAMERA_1_URL": "rtsp://camera/stream1",
+                },
+            )
+
+    def test_rejects_invalid_worker_slot_transport(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "workers": {
+                "enabled": True,
+                "slot_transport": "srt",
+            },
+        }
+
+        with self.assertRaises(ConfigError):
+            parse_config(
+                raw,
+                {
+                    "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                    "CAMERA_1_URL": "rtsp://camera/stream1",
+                },
+            )
+
+    def test_rejects_worker_udp_port_overflow(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "workers": {
+                "enabled": True,
+                "slot_transport": "udp_mpegts",
+                "udp_base_port": 65535,
+            },
+            "inputs": [
+                BASE_CONFIG["inputs"][0],
+                {
+                    **BASE_CONFIG["inputs"][0],
+                    "name": "camera-2",
+                    "x": 960,
+                },
+            ],
         }
 
         with self.assertRaises(ConfigError):

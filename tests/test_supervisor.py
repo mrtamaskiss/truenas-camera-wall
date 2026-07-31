@@ -48,6 +48,7 @@ def make_worker_config():
             "workers": {
                 "enabled": True,
                 "mode": "remux",
+                "slot_transport": "udp_mpegts",
                 "wall_input_preflight": False,
             },
             "inputs": [
@@ -94,6 +95,8 @@ class SupervisorTests(unittest.TestCase):
         summary = _runtime_summary(make_worker_config(), {"camera-1"}, False)
 
         self.assertEqual(summary["workers"], "remux")
+        self.assertEqual(summary["worker_transport"], "udp_mpegts")
+        self.assertTrue(summary["worker_fallback"])
         self.assertEqual(summary["worker_inputs"], 1)
         self.assertFalse(summary["input_preflight"])
         self.assertFalse(summary["worker_wall_preflight"])

@@ -501,6 +501,8 @@ def _runtime_summary(
         "offline_inputs": max(0, enabled_count - active_count),
         "input_preflight": preflight_enabled,
         "workers": config.workers.mode if config.workers.enabled else "off",
+        "worker_transport": config.workers.slot_transport if config.workers.enabled else "-",
+        "worker_fallback": config.workers.fallback_enabled if config.workers.enabled else False,
         "worker_inputs": enabled_count if config.workers.enabled else 0,
         "worker_wall_preflight": config.workers.wall_input_preflight
         if config.workers.enabled

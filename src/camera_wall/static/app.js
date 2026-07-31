@@ -207,11 +207,29 @@ function renderOutput() {
       [["remux", "remux"]],
       (value) => setWorkers("mode", value)
     ),
+    selectField(
+      "Slot transport",
+      workers.slot_transport || "rtsp",
+      [
+        ["rtsp", "rtsp"],
+        ["udp_mpegts", "udp mpeg-ts"],
+      ],
+      (value) => setWorkers("slot_transport", value)
+    ),
     textField(
       "Worker template",
       workers.output_template || "",
       (value) => setWorkers("output_template", value),
       true
+    ),
+    textField(
+      "Wall input template",
+      workers.wall_input_template || "",
+      (value) => setWorkers("wall_input_template", value),
+      true
+    ),
+    numberField("UDP base port", workers.udp_base_port ?? 15000, (value) =>
+      setWorkers("udp_base_port", value)
     ),
     selectField(
       "Worker RTSP",
@@ -222,11 +240,20 @@ function renderOutput() {
       ],
       (value) => setWorkers("rtsp_transport", value)
     ),
+    checkField("Fallback stream", workers.fallback_enabled, (value) =>
+      setWorkers("fallback_enabled", value)
+    ),
     numberField("Worker grace", workers.start_grace_seconds ?? 2, (value) =>
       setWorkers("start_grace_seconds", value)
     ),
     numberField("Worker restart", workers.restart_delay_seconds ?? 5, (value) =>
       setWorkers("restart_delay_seconds", value)
+    ),
+    numberField("Live retry", workers.retry_live_seconds ?? 15, (value) =>
+      setWorkers("retry_live_seconds", value)
+    ),
+    numberField("Stall timeout", workers.stall_timeout_seconds ?? 20, (value) =>
+      setWorkers("stall_timeout_seconds", value)
     ),
     checkField("Preflight worker URLs", workers.wall_input_preflight, (value) =>
       setWorkers("wall_input_preflight", value)
@@ -499,10 +526,16 @@ function ensureWorkers() {
   state.config.workers ||= {
     enabled: false,
     mode: "remux",
+    slot_transport: "rtsp",
     output_template: "",
+    wall_input_template: "",
+    udp_base_port: 15000,
     rtsp_transport: "tcp",
+    fallback_enabled: true,
     restart_delay_seconds: 5,
     start_grace_seconds: 2,
+    retry_live_seconds: 15,
+    stall_timeout_seconds: 20,
     wall_input_preflight: false,
   };
   return state.config.workers;
@@ -699,6 +732,8 @@ function renderStatus(status) {
     ["Workers", runtime.workers || "off"],
   ];
   if (runtime.workers && runtime.workers !== "off") {
+    items.push(["Worker transport", runtime.worker_transport || "-"]);
+    items.push(["Worker fallback", runtime.worker_fallback ? "on" : "off"]);
     items.push(["Worker inputs", runtime.worker_inputs ?? "-"]);
     items.push(["Worker preflight", runtime.worker_wall_preflight ? "on" : "off"]);
   }
@@ -786,7 +821,7 @@ function renderWorkerHealth(items) {
 
     const side = element("div", "input-health-side");
     const pill = element("span", `input-health-pill ${workerStateClass(item.state)}`);
-    pill.textContent = item.state || "unknown";
+    pill.textContent = item.mode ? `${item.state || "unknown"}:${item.mode}` : item.state || "unknown";
     const meta = document.createElement("span");
     const pid = item.pid ? `pid ${item.pid}` : "no pid";
     meta.textContent = `${pid}, restarts ${item.restarts ?? 0}`;

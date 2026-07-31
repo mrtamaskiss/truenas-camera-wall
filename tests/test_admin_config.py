@@ -41,10 +41,16 @@ def valid_admin_config(count: int = 3):
         "workers": {
             "enabled": False,
             "mode": "remux",
+            "slot_transport": "rtsp",
             "output_template": "",
+            "wall_input_template": "",
+            "udp_base_port": 15000,
             "rtsp_transport": "tcp",
+            "fallback_enabled": True,
             "restart_delay_seconds": 5,
             "start_grace_seconds": 2,
+            "retry_live_seconds": 15,
+            "stall_timeout_seconds": 20,
             "wall_input_preflight": False,
         },
         "inputs": [

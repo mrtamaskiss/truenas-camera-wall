@@ -18,7 +18,11 @@ class RemuxSlot:
     index: int
     input_cfg: InputConfig
     output_url: str
+    wall_input_url: str
     command: list[str]
+    fallback_command: list[str] | None = None
+    retry_live_seconds: int = 15
+    stall_timeout_seconds: int = 20
 
     @property
     def name(self) -> str:
@@ -31,12 +35,15 @@ class _WorkerRuntime:
     restart_delay_seconds: int
     process: subprocess.Popen[str] | None = None
     reader: threading.Thread | None = None
+    process_kind: str = "live"
     state: str = "stopped"
     restarts: int = 0
     last_exit_code: int | None = None
     last_error: str | None = None
     started_at: str | None = None
+    last_progress_at: float = 0
     next_start_after: float = 0
+    next_live_retry_at: float = 0
 
 
 class RemuxWorkerManager:
@@ -55,9 +62,12 @@ class RemuxWorkerManager:
         for name in self._worker_names():
             worker = self._worker(name)
             slot = desired.get(name)
-            if not worker or slot is None or worker.slot.command != slot.command:
+            if not worker or slot is None or worker.slot != slot:
                 self._stop_and_remove(name)
                 changed = True
+            elif worker.restart_delay_seconds != config.workers.restart_delay_seconds:
+                with self._lock:
+                    worker.restart_delay_seconds = config.workers.restart_delay_seconds
 
         for slot in desired.values():
             if self._worker(slot.name):
@@ -68,7 +78,7 @@ class RemuxWorkerManager:
             )
             with self._lock:
                 self._workers[slot.name] = worker
-            self._start_worker(worker, initial=True)
+            self._start_live(worker, initial=True)
             changed = True
         return changed
 
@@ -79,31 +89,24 @@ class RemuxWorkerManager:
             if process is not None:
                 exit_code = process.poll()
                 if exit_code is None:
+                    if self._is_stalled(worker, now):
+                        logging.warning(
+                            "Worker %s has no output progress for %s seconds; switching to fallback",
+                            worker.slot.name,
+                            self._stall_timeout(worker),
+                        )
+                        self._stop_process(worker, kill=True)
+                        self._handle_exit(worker, -9, now)
+                    elif self._should_retry_live(worker, now):
+                        logging.info("Worker %s retrying live camera input", worker.slot.name)
+                        self._stop_process(worker)
+                        self._start_live(worker)
                     continue
-                if worker.reader:
-                    worker.reader.join(timeout=1)
-                with self._lock:
-                    worker.process = None
-                    worker.reader = None
-                    worker.last_exit_code = exit_code
-                    worker.state = "stopped" if exit_code == 0 else "failed"
-                    worker.last_error = (
-                        None if exit_code == 0 else f"Worker exited with code {exit_code}"
-                    )
-                    worker.next_start_after = now + worker.restart_delay_seconds
-                logging.warning(
-                    "Worker %s exited with code %s; restarting in %s seconds",
-                    worker.slot.name,
-                    exit_code,
-                    worker.restart_delay_seconds,
-                )
+                self._handle_exit(worker, exit_code, now)
                 continue
 
             if worker.next_start_after and now >= worker.next_start_after:
-                with self._lock:
-                    worker.restarts += 1
-                    worker.next_start_after = 0
-                self._start_worker(worker, initial=False)
+                self._start_preferred(worker)
 
     def stop(self) -> None:
         for name in self._worker_names():
@@ -119,6 +122,7 @@ class RemuxWorkerManager:
                     "index": worker.slot.index,
                     "name": worker.slot.name,
                     "state": "running" if running else worker.state,
+                    "mode": worker.process_kind,
                     "pid": process.pid if running and process else None,
                     "restarts": worker.restarts,
                     "last_exit_code": worker.last_exit_code,
@@ -126,20 +130,47 @@ class RemuxWorkerManager:
                     "started_at": worker.started_at,
                     "source_url": mask_url(worker.slot.input_cfg.url),
                     "output_url": mask_url(worker.slot.output_url),
+                    "wall_input_url": mask_url(worker.slot.wall_input_url),
                     "command": masked_command(worker.slot.command),
                 }
             )
         return sorted(payloads, key=lambda item: int(item["index"]))
 
-    def _start_worker(self, worker: _WorkerRuntime, initial: bool) -> None:
+    def _start_preferred(self, worker: _WorkerRuntime) -> None:
+        with self._lock:
+            worker.restarts += 1
+            worker.next_start_after = 0
+        self._start_live(worker)
+
+    def _start_live(self, worker: _WorkerRuntime, initial: bool = False) -> None:
+        self._start_worker(worker, "live", worker.slot.command, initial)
+
+    def _start_fallback(self, worker: _WorkerRuntime) -> None:
+        if not worker.slot.fallback_command:
+            with self._lock:
+                worker.process = None
+                worker.reader = None
+                worker.process_kind = "live"
+                worker.state = "failed"
+                worker.next_start_after = time.monotonic() + worker.restart_delay_seconds
+            return
+        self._start_worker(worker, "fallback", worker.slot.fallback_command, initial=False)
+
+    def _start_worker(
+        self,
+        worker: _WorkerRuntime,
+        process_kind: str,
+        command: list[str],
+        initial: bool,
+    ) -> None:
         name = worker.slot.name
         if initial:
-            logging.info("Worker %s command: %s", name, masked_command(worker.slot.command))
+            logging.info("Worker %s command: %s", name, masked_command(command))
         else:
-            logging.info("Restarting worker %s", name)
+            logging.info("Starting worker %s in %s mode", name, process_kind)
         try:
             process = subprocess.Popen(
-                worker.slot.command,
+                command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -151,50 +182,139 @@ class RemuxWorkerManager:
             with self._lock:
                 worker.process = None
                 worker.reader = None
+                worker.process_kind = process_kind
                 worker.state = "failed"
                 worker.last_exit_code = 127
-                worker.last_error = f"FFmpeg binary not found: {worker.slot.command[0]}"
+                worker.last_error = f"FFmpeg binary not found: {command[0]}"
                 worker.next_start_after = time.monotonic() + worker.restart_delay_seconds
-            logging.error("Worker %s FFmpeg binary not found: %s", name, worker.slot.command[0])
+            logging.error("Worker %s FFmpeg binary not found: %s", name, command[0])
             return
 
         reader = threading.Thread(
             target=_log_worker_output,
-            args=(name, process),
+            args=(name, process, worker),
             name=f"worker-{name}-output",
             daemon=True,
         )
         reader.start()
+        now = time.monotonic()
         with self._lock:
             worker.process = process
             worker.reader = reader
+            worker.process_kind = process_kind
             worker.state = "running"
             worker.last_error = None
             worker.last_exit_code = None
             worker.started_at = _utc_now()
+            worker.last_progress_at = now
+            worker.next_start_after = 0
+            if process_kind == "live":
+                worker.next_live_retry_at = 0
         logging.info("Worker %s started with pid %s", name, process.pid)
 
     def _stop_and_remove(self, name: str) -> None:
         worker = self._worker(name)
         if not worker:
             return
+        self._stop_process(worker)
+        with self._lock:
+            self._workers.pop(name, None)
+
+    def _stop_process(self, worker: _WorkerRuntime, kill: bool = False) -> None:
         process = worker.process
         if process and process.poll() is None:
-            logging.info("Stopping worker %s pid %s", name, process.pid)
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                logging.warning(
-                    "Worker %s did not stop after SIGTERM; killing pid %s",
-                    name,
-                    process.pid,
-                )
+            logging.info("Stopping worker %s pid %s", worker.slot.name, process.pid)
+            if kill:
                 process.kill()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    logging.warning(
+                        "Worker %s did not stop after SIGKILL; leaving process cleanup to OS",
+                        worker.slot.name,
+                    )
+            else:
+                self._terminate_process(worker, process)
         if worker.reader:
             worker.reader.join(timeout=1)
         with self._lock:
-            self._workers.pop(name, None)
+            worker.process = None
+            worker.reader = None
+
+    def _terminate_process(
+        self, worker: _WorkerRuntime, process: subprocess.Popen[str]
+    ) -> None:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            logging.warning(
+                "Worker %s did not stop after SIGTERM; killing pid %s",
+                worker.slot.name,
+                process.pid,
+            )
+            process.kill()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                logging.warning(
+                    "Worker %s did not stop after SIGKILL; leaving process cleanup to OS",
+                    worker.slot.name,
+                )
+
+    def _handle_exit(self, worker: _WorkerRuntime, exit_code: int, now: float) -> None:
+        if worker.reader:
+            worker.reader.join(timeout=1)
+        process_kind = worker.process_kind
+        with self._lock:
+            worker.process = None
+            worker.reader = None
+            worker.last_exit_code = exit_code
+            worker.state = "stopped" if exit_code == 0 else "failed"
+            worker.last_error = None if exit_code == 0 else f"Worker exited with code {exit_code}"
+
+        if process_kind == "live" and worker.slot.fallback_command:
+            with self._lock:
+                worker.next_live_retry_at = now + self._retry_live_seconds(worker)
+            logging.warning(
+                "Worker %s live input exited with code %s; starting fallback",
+                worker.slot.name,
+                exit_code,
+            )
+            self._start_fallback(worker)
+            return
+
+        with self._lock:
+            worker.next_start_after = now + worker.restart_delay_seconds
+        logging.warning(
+            "Worker %s exited with code %s; restarting in %s seconds",
+            worker.slot.name,
+            exit_code,
+            worker.restart_delay_seconds,
+        )
+
+    def _is_stalled(self, worker: _WorkerRuntime, now: float) -> bool:
+        if worker.process_kind != "live":
+            return False
+        stall_timeout = self._stall_timeout(worker)
+        if stall_timeout <= 0:
+            return False
+        return bool(worker.process and now - worker.last_progress_at > stall_timeout)
+
+    def _should_retry_live(self, worker: _WorkerRuntime, now: float) -> bool:
+        return (
+            worker.process_kind == "fallback"
+            and worker.next_live_retry_at > 0
+            and now >= worker.next_live_retry_at
+        )
+
+    def _stall_timeout(self, worker: _WorkerRuntime) -> int:
+        return max(0, worker.slot.stall_timeout_seconds)
+
+    def _retry_live_seconds(self, worker: _WorkerRuntime) -> int:
+        return max(1, worker.slot.retry_live_seconds)
 
     def _worker(self, name: str) -> _WorkerRuntime | None:
         with self._lock:
@@ -220,7 +340,13 @@ def build_remux_slots(config: AppConfig) -> tuple[RemuxSlot, ...]:
                 index=index,
                 input_cfg=input_cfg,
                 output_url=output_url,
+                wall_input_url=worker_wall_input_url(config, input_cfg, index, output_url),
                 command=build_remux_worker_command(config, input_cfg, output_url),
+                fallback_command=build_fallback_worker_command(config, input_cfg, output_url)
+                if config.workers.fallback_enabled
+                else None,
+                retry_live_seconds=config.workers.retry_live_seconds,
+                stall_timeout_seconds=config.workers.stall_timeout_seconds,
             )
         )
     return tuple(slots)
@@ -230,7 +356,7 @@ def build_worker_wall_config(config: AppConfig) -> AppConfig:
     if not config.workers.enabled:
         return config
     output_urls = {
-        slot.input_cfg.name: slot.output_url
+        slot.input_cfg.name: slot.wall_input_url
         for slot in build_remux_slots(config)
     }
     inputs = tuple(
@@ -277,20 +403,75 @@ def build_remux_worker_command(
         [
             "-i",
             input_cfg.url,
+            "-progress",
+            "pipe:1",
+            "-stats_period",
+            _progress_interval(config),
             "-map",
             "0:v:0",
             "-an",
             "-c:v",
             "copy",
-            "-f",
-            "rtsp",
-            "-rtsp_transport",
-            workers.rtsp_transport,
-            "-muxdelay",
-            "0.1",
-            output_url,
         ]
     )
+    args.extend(_worker_output_args(config, output_url))
+    return args
+
+
+def build_fallback_worker_command(
+    config: AppConfig, input_cfg: InputConfig, output_url: str
+) -> list[str]:
+    fps = config.output.fps
+    text = _escape_drawtext(f"{input_cfg.label or input_cfg.name} offline")
+    source = (
+        f"color=c=black:s={input_cfg.width}x{input_cfg.height}:r={fps},"
+        "format=yuv420p,"
+        "drawtext="
+        f"text='{text}':"
+        "x=(w-text_w)/2:y=(h-text_h)/2:"
+        "fontcolor=white@0.76:fontsize=30:"
+        "box=1:boxcolor=black@0.62:boxborderw=10"
+    )
+    args = [
+        config.ffmpeg.binary,
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        config.ffmpeg.log_level,
+        "-re",
+        "-f",
+        "lavfi",
+        "-i",
+        source,
+        "-progress",
+        "pipe:1",
+        "-stats_period",
+        _progress_interval(config),
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-tune",
+        "zerolatency",
+        "-profile:v",
+        "baseline",
+        "-pix_fmt",
+        "yuv420p",
+        "-b:v",
+        "350k",
+        "-maxrate",
+        "350k",
+        "-bufsize",
+        "700k",
+        "-g",
+        str(fps * 2),
+        "-keyint_min",
+        str(fps),
+        "-r",
+        str(fps),
+    ]
+    args.extend(_worker_output_args(config, output_url))
     return args
 
 
@@ -299,7 +480,51 @@ def worker_output_url(config: AppConfig, input_cfg: InputConfig, index: int) -> 
     template = config.workers.output_template.strip()
     if template:
         return template.replace("{name}", slug).replace("{index}", str(index + 1))
+    if config.workers.slot_transport == "udp_mpegts":
+        return f"udp://127.0.0.1:{config.workers.udp_base_port + index}?pkt_size=1316"
     return _derive_output_url(config.output.url, slug)
+
+
+def worker_wall_input_url(
+    config: AppConfig, input_cfg: InputConfig, index: int, output_url: str
+) -> str:
+    slug = _slug(input_cfg.name, index)
+    template = config.workers.wall_input_template.strip()
+    if template:
+        return template.replace("{name}", slug).replace("{index}", str(index + 1))
+    if config.workers.slot_transport == "udp_mpegts":
+        parsed = urlsplit(output_url)
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                "fifo_size=5000000&overrun_nonfatal=1",
+                parsed.fragment,
+            )
+        )
+    return output_url
+
+
+def _worker_output_args(config: AppConfig, output_url: str) -> list[str]:
+    if config.workers.slot_transport == "udp_mpegts":
+        return ["-f", "mpegts", "-muxdelay", "0", output_url]
+    return [
+        "-f",
+        "rtsp",
+        "-rtsp_transport",
+        config.workers.rtsp_transport,
+        "-muxdelay",
+        "0.1",
+        output_url,
+    ]
+
+
+def _progress_interval(config: AppConfig) -> str:
+    timeout = config.workers.stall_timeout_seconds
+    if timeout <= 0:
+        return "5"
+    return str(max(1, min(5, timeout // 2 or 1)))
 
 
 def _derive_output_url(output_url: str, slug: str) -> str:
@@ -329,13 +554,47 @@ def _is_http_url(value: str) -> bool:
     return value.lower().startswith(("http://", "https://"))
 
 
-def _log_worker_output(name: str, process: subprocess.Popen[str]) -> None:
+def _escape_drawtext(value: str) -> str:
+    return (
+        value.replace("\\", r"\\")
+        .replace(":", r"\:")
+        .replace("'", r"\'")
+        .replace(",", r"\,")
+        .replace("%", r"\%")
+    )
+
+
+def _log_worker_output(
+    name: str, process: subprocess.Popen[str], worker: _WorkerRuntime
+) -> None:
     if not process.stdout:
         return
     for raw_line in process.stdout:
         line = raw_line.rstrip()
         if line:
+            if _is_progress_line(line):
+                worker.last_progress_at = time.monotonic()
+                continue
             logging.warning("worker %s %s", name, mask_text(line))
+
+
+def _is_progress_line(line: str) -> bool:
+    return line.startswith(
+        (
+            "bitrate=",
+            "drop_frames=",
+            "dup_frames=",
+            "fps=",
+            "frame=",
+            "out_time=",
+            "out_time_ms=",
+            "out_time_us=",
+            "progress=",
+            "speed=",
+            "stream_",
+            "total_size=",
+        )
+    )
 
 
 def _utc_now() -> str:

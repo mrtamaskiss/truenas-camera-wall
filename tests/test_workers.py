@@ -13,9 +13,13 @@ def make_config(worker_overrides: dict | None = None):
     workers = {
         "enabled": True,
         "mode": "remux",
+        "slot_transport": "rtsp",
         "rtsp_transport": "tcp",
+        "fallback_enabled": True,
         "restart_delay_seconds": 5,
         "start_grace_seconds": 2,
+        "retry_live_seconds": 15,
+        "stall_timeout_seconds": 20,
         "wall_input_preflight": False,
     }
     if worker_overrides:
@@ -91,10 +95,40 @@ class WorkerTests(unittest.TestCase):
 
         self.assertIn("-c:v", command)
         self.assertEqual(command[command.index("-c:v") + 1], "copy")
+        self.assertIn("-progress", command)
         self.assertIn("-map", command)
         self.assertEqual(command[command.index("-map") + 1], "0:v:0")
         self.assertIn("-rtsp_transport", command)
         self.assertEqual(command[-1], "rtsp://192.168.64.10:8554/camera_wall_camera-1")
+
+    def test_udp_mpegts_slots_use_local_ports_and_fallback(self) -> None:
+        config = make_config({"slot_transport": "udp_mpegts", "udp_base_port": 15100})
+        slots = build_remux_slots(config)
+        wall_config = build_worker_wall_config(config)
+
+        self.assertEqual(slots[0].output_url, "udp://127.0.0.1:15100?pkt_size=1316")
+        self.assertEqual(
+            slots[0].wall_input_url,
+            "udp://127.0.0.1:15100?fifo_size=5000000&overrun_nonfatal=1",
+        )
+        self.assertIn("-f", slots[0].command)
+        self.assertEqual(slots[0].command[slots[0].command.index("-f") + 1], "mpegts")
+        self.assertIsNotNone(slots[0].fallback_command)
+        self.assertIn("lavfi", slots[0].fallback_command or [])
+        self.assertEqual(wall_config.inputs[0].url, slots[0].wall_input_url)
+
+    def test_udp_wall_input_template_overrides_derived_url(self) -> None:
+        config = make_config(
+            {
+                "slot_transport": "udp_mpegts",
+                "output_template": "udp://127.0.0.1:1600{index}?pkt_size=1316",
+                "wall_input_template": "udp://127.0.0.1:1600{index}?fifo_size=1000",
+            }
+        )
+        slots = build_remux_slots(config)
+
+        self.assertEqual(slots[1].output_url, "udp://127.0.0.1:16002?pkt_size=1316")
+        self.assertEqual(slots[1].wall_input_url, "udp://127.0.0.1:16002?fifo_size=1000")
 
     def test_http_worker_command_keeps_reconnect_options(self) -> None:
         config = make_config()
