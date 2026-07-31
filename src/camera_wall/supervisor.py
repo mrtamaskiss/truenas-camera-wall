@@ -18,6 +18,7 @@ from .gpu import GpuMonitor
 from .input_health import InputHealthTracker
 from .log_buffer import install_log_buffer
 from .web import WebSettings, start_admin_server
+from .workers import RemuxWorkerManager, build_worker_wall_config
 
 
 PID_FILE = Path(os.environ.get("CAMERA_WALL_PID_FILE", "/tmp/camera-wall/ffmpeg.pid"))
@@ -43,6 +44,7 @@ class CameraWallSupervisor:
         self._restart_delay_seconds = 5
         self._gpu_monitor = GpuMonitor.from_env()
         self._input_health = InputHealthTracker()
+        self._worker_manager = RemuxWorkerManager()
         self._preflight_enabled = _env_bool("CAMERA_WALL_INPUT_PREFLIGHT_ENABLED", True)
         self._preflight_timeout_seconds = _env_int("CAMERA_WALL_INPUT_PREFLIGHT_TIMEOUT", 5)
         self._preflight_concurrency = _env_int("CAMERA_WALL_INPUT_PREFLIGHT_CONCURRENCY", 4)
@@ -58,11 +60,29 @@ class CameraWallSupervisor:
                 try:
                     config = load_config(self.config_path)
                     self._input_health.configure(config)
-                    active_input_names, failures = self._preflight_inputs(config)
+                    workers_changed = self._worker_manager.reconcile(config)
+                    if workers_changed and config.workers.enabled and config.workers.start_grace_seconds:
+                        logging.info(
+                            "Waiting %s seconds for remux worker RTSP publishes",
+                            config.workers.start_grace_seconds,
+                        )
+                        self._sleep_or_wake(config.workers.start_grace_seconds)
+                        if self.stop_requested.is_set() or self.restart_requested.is_set():
+                            continue
+                    self._worker_manager.poll()
+                    wall_config = build_worker_wall_config(config)
+                    wall_preflight_enabled = _wall_preflight_enabled(
+                        config, self._preflight_enabled
+                    )
+                    active_input_names, failures = self._preflight_inputs(
+                        wall_config,
+                        wall_preflight_enabled,
+                    )
                     self._input_health.mark_preflight(active_input_names, failures)
-                    command = build_ffmpeg_command(config, active_input_names)
+                    command = build_ffmpeg_command(wall_config, active_input_names)
                     self._restart_delay_seconds = config.ffmpeg.restart_delay_seconds
                 except ConfigError as exc:
+                    self._worker_manager.stop()
                     self._set_state(last_error=str(exc), last_command=None, runtime={})
                     self._input_health.clear(str(exc))
                     logging.error("Configuration error: %s", exc)
@@ -73,10 +93,19 @@ class CameraWallSupervisor:
                 self._set_state(
                     last_error=None,
                     last_command=rendered_command,
-                    runtime=_runtime_summary(config, active_input_names, self._preflight_enabled),
+                    runtime=_runtime_summary(
+                        config,
+                        active_input_names,
+                        wall_preflight_enabled,
+                    ),
                 )
                 logging.info("FFmpeg command: %s", rendered_command)
-                exit_code = self._run_once(command, config, active_input_names)
+                exit_code = self._run_once(
+                    command,
+                    wall_config,
+                    active_input_names,
+                    wall_preflight_enabled,
+                )
                 if self.stop_requested.is_set():
                     return exit_code
                 if self.restart_requested.is_set():
@@ -92,6 +121,7 @@ class CameraWallSupervisor:
             return exit_code
         finally:
             self._gpu_monitor.stop()
+            self._worker_manager.stop()
 
     def request_restart(self, reason: str) -> None:
         with self._lock:
@@ -108,6 +138,7 @@ class CameraWallSupervisor:
             logging.info("Stopping FFmpeg pid %s", process.pid)
             self._terminate_process(process)
         self._gpu_monitor.stop()
+        self._worker_manager.stop()
 
     def status_snapshot(self) -> dict[str, object]:
         process = self._current_process
@@ -126,11 +157,16 @@ class CameraWallSupervisor:
                 "last_command": self._last_command,
                 "runtime": self._runtime,
                 "input_health": self._input_health.snapshot(),
+                "workers": self._worker_manager.snapshot(),
                 "gpu": self._gpu_monitor.snapshot(),
             }
 
     def _run_once(
-        self, command: list[str], config: AppConfig, active_input_names: set[str]
+        self,
+        command: list[str],
+        config: AppConfig,
+        active_input_names: set[str],
+        preflight_enabled: bool,
     ) -> int:
         PID_FILE.parent.mkdir(parents=True, exist_ok=True)
         reader: threading.Thread | None = None
@@ -162,7 +198,13 @@ class CameraWallSupervisor:
                     self._set_state(last_exit_code=exit_code)
                     self._input_health.mark_stopped(exit_code, active_input_names)
                     return exit_code
-                if self._should_reprobe(config, active_input_names, next_reprobe):
+                self._worker_manager.poll()
+                if self._should_reprobe(
+                    config,
+                    active_input_names,
+                    next_reprobe,
+                    preflight_enabled,
+                ):
                     next_reprobe = time.monotonic() + max(1, self._reprobe_seconds)
                     recovered = self._reprobe_offline_inputs(config, active_input_names)
                     if recovered:
@@ -190,9 +232,12 @@ class CameraWallSupervisor:
             except FileNotFoundError:
                 pass
 
-    def _preflight_inputs(self, config: AppConfig) -> tuple[set[str], dict[str, str]]:
+    def _preflight_inputs(
+        self, config: AppConfig, preflight_enabled: bool | None = None
+    ) -> tuple[set[str], dict[str, str]]:
         inputs = config.enabled_inputs
-        if not self._preflight_enabled:
+        enabled = self._preflight_enabled if preflight_enabled is None else preflight_enabled
+        if not enabled:
             return {item.name for item in inputs}, {}
         if not inputs:
             return set(), {}
@@ -238,9 +283,13 @@ class CameraWallSupervisor:
         return diagnose_stream(request)
 
     def _should_reprobe(
-        self, config: AppConfig, active_input_names: set[str], next_reprobe: float
+        self,
+        config: AppConfig,
+        active_input_names: set[str],
+        next_reprobe: float,
+        preflight_enabled: bool,
     ) -> bool:
-        if not self._preflight_enabled or self._reprobe_seconds <= 0:
+        if not preflight_enabled or self._reprobe_seconds <= 0:
             return False
         if self.restart_requested.is_set() or self.stop_requested.is_set():
             return False
@@ -315,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_command:
         try:
             config = load_config(args.config)
-            command = build_ffmpeg_command(config)
+            command = build_ffmpeg_command(build_worker_wall_config(config))
         except ConfigError as exc:
             logging.error("Configuration error: %s", exc)
             return 2
@@ -432,7 +481,9 @@ def _utc_now() -> str:
 
 
 def _runtime_summary(
-    config: AppConfig, active_input_names: set[str], preflight_enabled: bool
+    config: AppConfig,
+    active_input_names: set[str],
+    preflight_enabled: bool,
 ) -> dict[str, object]:
     output = config.output
     ffmpeg = config.ffmpeg
@@ -449,7 +500,18 @@ def _runtime_summary(
         "active_inputs": active_count,
         "offline_inputs": max(0, enabled_count - active_count),
         "input_preflight": preflight_enabled,
+        "workers": config.workers.mode if config.workers.enabled else "off",
+        "worker_inputs": enabled_count if config.workers.enabled else 0,
+        "worker_wall_preflight": config.workers.wall_input_preflight
+        if config.workers.enabled
+        else False,
     }
+
+
+def _wall_preflight_enabled(config: AppConfig, default_enabled: bool) -> bool:
+    if not config.workers.enabled:
+        return default_enabled
+    return config.workers.wall_input_preflight
 
 
 def _log_process_output(process: subprocess.Popen[str], on_line: object | None = None) -> None:

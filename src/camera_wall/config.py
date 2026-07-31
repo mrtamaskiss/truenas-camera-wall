@@ -59,10 +59,22 @@ class FfmpegConfig:
 
 
 @dataclass(frozen=True)
+class WorkerConfig:
+    enabled: bool = False
+    mode: str = "remux"
+    output_template: str = ""
+    rtsp_transport: str = "tcp"
+    restart_delay_seconds: int = 5
+    start_grace_seconds: int = 2
+    wall_input_preflight: bool = False
+
+
+@dataclass(frozen=True)
 class AppConfig:
     output: OutputConfig
     inputs: tuple[InputConfig, ...]
     ffmpeg: FfmpegConfig = FfmpegConfig()
+    workers: WorkerConfig = WorkerConfig()
 
     @property
     def enabled_inputs(self) -> tuple[InputConfig, ...]:
@@ -147,12 +159,35 @@ def parse_config(raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -
         ),
     )
 
+    workers_raw = _optional_mapping(raw.get("workers"), "workers")
+    workers = WorkerConfig(
+        enabled=_bool(workers_raw.get("enabled", False), "workers.enabled"),
+        mode=_worker_mode(
+            _resolved_string(workers_raw.get("mode", "remux"), "workers.mode", env)
+        ),
+        output_template=_resolved_string(
+            workers_raw.get("output_template", ""), "workers.output_template", env
+        ),
+        rtsp_transport=_transport(
+            workers_raw.get("rtsp_transport", "tcp"), "workers.rtsp_transport"
+        ),
+        restart_delay_seconds=_positive_int(
+            workers_raw.get("restart_delay_seconds", 5), "workers.restart_delay_seconds"
+        ),
+        start_grace_seconds=_nonnegative_int(
+            workers_raw.get("start_grace_seconds", 2), "workers.start_grace_seconds"
+        ),
+        wall_input_preflight=_bool(
+            workers_raw.get("wall_input_preflight", False), "workers.wall_input_preflight"
+        ),
+    )
+
     inputs = tuple(_parse_input(item, idx, output, env) for idx, item in enumerate(inputs_raw))
     enabled = tuple(item for item in inputs if item.enabled)
     if not enabled:
         raise ConfigError("At least one input must be enabled")
     _validate_unique_names(inputs)
-    return AppConfig(output=output, inputs=inputs, ffmpeg=ffmpeg)
+    return AppConfig(output=output, inputs=inputs, ffmpeg=ffmpeg, workers=workers)
 
 
 def resolve_text(value: str, env: Mapping[str, str] | None = None) -> str:
@@ -322,6 +357,13 @@ def _input_hwaccel(value: Any) -> str:
     if input_hwaccel not in {"software", "vaapi"}:
         raise ConfigError("ffmpeg.input_hwaccel must be software or vaapi")
     return input_hwaccel
+
+
+def _worker_mode(value: Any) -> str:
+    mode = _string(value, "workers.mode").lower()
+    if mode != "remux":
+        raise ConfigError("workers.mode must be remux")
+    return mode
 
 
 def _transport(value: Any, name: str) -> str:

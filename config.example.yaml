@@ -21,6 +21,15 @@ ffmpeg:
   http_reconnect_delay_max_seconds: 5
   restart_delay_seconds: 5
 
+workers:
+  enabled: false
+  mode: remux
+  output_template: ""
+  rtsp_transport: tcp
+  restart_delay_seconds: 5
+  start_grace_seconds: 2
+  wall_input_preflight: false
+
 inputs:
   - name: camera-1
     enabled: true

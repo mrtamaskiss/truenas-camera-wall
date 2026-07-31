@@ -172,6 +172,51 @@ class ConfigTests(unittest.TestCase):
                 },
             )
 
+    def test_parses_remux_workers(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "workers": {
+                "enabled": True,
+                "mode": "remux",
+                "output_template": "${WORKER_TEMPLATE}",
+                "rtsp_transport": "tcp",
+                "restart_delay_seconds": 7,
+                "start_grace_seconds": 1,
+                "wall_input_preflight": True,
+            },
+        }
+        config = parse_config(
+            raw,
+            {
+                "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                "CAMERA_1_URL": "rtsp://camera/stream1",
+                "WORKER_TEMPLATE": "rtsp://go2rtc:8554/wall_{name}",
+            },
+        )
+
+        self.assertTrue(config.workers.enabled)
+        self.assertEqual(config.workers.output_template, "rtsp://go2rtc:8554/wall_{name}")
+        self.assertEqual(config.workers.restart_delay_seconds, 7)
+        self.assertTrue(config.workers.wall_input_preflight)
+
+    def test_rejects_invalid_worker_mode(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "workers": {
+                "enabled": True,
+                "mode": "transcode",
+            },
+        }
+
+        with self.assertRaises(ConfigError):
+            parse_config(
+                raw,
+                {
+                    "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                    "CAMERA_1_URL": "rtsp://camera/stream1",
+                },
+            )
+
     def test_rejects_out_of_bounds_layout(self) -> None:
         raw = {
             **BASE_CONFIG,

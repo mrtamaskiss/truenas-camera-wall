@@ -127,6 +127,7 @@ function renderOutput() {
   form.replaceChildren();
   const output = ensureOutput();
   const ffmpeg = ensureFfmpeg();
+  const workers = ensureWorkers();
 
   form.append(
     textField("RTSP output", output.url, (value) => setOutput("url", value), true),
@@ -198,6 +199,37 @@ function renderOutput() {
     ),
     numberField("Restart delay", ffmpeg.restart_delay_seconds, (value) =>
       setFfmpeg("restart_delay_seconds", value)
+    ),
+    checkField("Remux workers", workers.enabled, (value) => setWorkers("enabled", value)),
+    selectField(
+      "Worker mode",
+      workers.mode || "remux",
+      [["remux", "remux"]],
+      (value) => setWorkers("mode", value)
+    ),
+    textField(
+      "Worker template",
+      workers.output_template || "",
+      (value) => setWorkers("output_template", value),
+      true
+    ),
+    selectField(
+      "Worker RTSP",
+      workers.rtsp_transport || "tcp",
+      [
+        ["tcp", "tcp"],
+        ["udp", "udp"],
+      ],
+      (value) => setWorkers("rtsp_transport", value)
+    ),
+    numberField("Worker grace", workers.start_grace_seconds ?? 2, (value) =>
+      setWorkers("start_grace_seconds", value)
+    ),
+    numberField("Worker restart", workers.restart_delay_seconds ?? 5, (value) =>
+      setWorkers("restart_delay_seconds", value)
+    ),
+    checkField("Preflight worker URLs", workers.wall_input_preflight, (value) =>
+      setWorkers("wall_input_preflight", value)
     )
   );
 }
@@ -442,6 +474,11 @@ function setFfmpeg(key, value) {
   markDirty();
 }
 
+function setWorkers(key, value) {
+  ensureWorkers()[key] = value;
+  markDirty();
+}
+
 function setCamera(index, key, value) {
   state.config.inputs[index][key] = value;
   markDirty();
@@ -456,6 +493,19 @@ function ensureOutput() {
 function ensureFfmpeg() {
   state.config.ffmpeg ||= {};
   return state.config.ffmpeg;
+}
+
+function ensureWorkers() {
+  state.config.workers ||= {
+    enabled: false,
+    mode: "remux",
+    output_template: "",
+    rtsp_transport: "tcp",
+    restart_delay_seconds: 5,
+    start_grace_seconds: 2,
+    wall_input_preflight: false,
+  };
+  return state.config.workers;
 }
 
 function ensureInputs() {
@@ -646,7 +696,12 @@ function renderStatus(status) {
     ["Inputs", runtime.enabled_inputs ?? "-"],
     ["Active inputs", runtime.active_inputs ?? "-"],
     ["Offline inputs", runtime.offline_inputs ?? "-"],
+    ["Workers", runtime.workers || "off"],
   ];
+  if (runtime.workers && runtime.workers !== "off") {
+    items.push(["Worker inputs", runtime.worker_inputs ?? "-"]);
+    items.push(["Worker preflight", runtime.worker_wall_preflight ? "on" : "off"]);
+  }
   if (gpu.enabled !== false) {
     items.push(["GPU load", gpu.available ? formatPercent(gpu.load_percent) : "unavailable"]);
     items.push(["GPU video", formatPercent(gpu.video_percent)]);
@@ -661,6 +716,7 @@ function renderStatus(status) {
   if (gpu.error) items.push(["GPU note", gpu.error]);
   items.forEach(([label, value]) => grid.append(statusCard(label, value)));
   renderInputHealth(status.input_health || []);
+  renderWorkerHealth(status.workers || []);
   renderDiagnosticsPanel();
   command.textContent = status.last_command || "No command yet";
 }
@@ -709,6 +765,32 @@ function renderInputHealth(items) {
     const seen = document.createElement("span");
     seen.textContent = item.last_seen_at || "-";
     side.append(pill, seen);
+
+    row.append(main, side);
+    panel.append(row);
+  });
+}
+
+function renderWorkerHealth(items) {
+  const panel = $("workerPanel");
+  panel.replaceChildren();
+  if (!items.length) return;
+  items.forEach((item) => {
+    const row = element("div", `input-health-row ${workerStateClass(item.state)}`);
+    const main = element("div", "input-health-main");
+    const title = document.createElement("strong");
+    const detail = document.createElement("span");
+    title.textContent = `${item.name || "worker"} worker`;
+    detail.textContent = item.last_error || item.output_url || "-";
+    main.append(title, detail);
+
+    const side = element("div", "input-health-side");
+    const pill = element("span", `input-health-pill ${workerStateClass(item.state)}`);
+    pill.textContent = item.state || "unknown";
+    const meta = document.createElement("span");
+    const pid = item.pid ? `pid ${item.pid}` : "no pid";
+    meta.textContent = `${pid}, restarts ${item.restarts ?? 0}`;
+    side.append(pill, meta);
 
     row.append(main, side);
     panel.append(row);
@@ -882,6 +964,13 @@ function healthStateClass(value) {
   if (value === "connecting" || value === "restarting" || value === "offline") return "warn";
   if (value === "failed" || value === "stopped") return "bad";
   if (value === "disabled") return "disabled";
+  return "unknown";
+}
+
+function workerStateClass(value) {
+  if (value === "running") return "ok";
+  if (value === "starting" || value === "stopped") return "warn";
+  if (value === "failed") return "bad";
   return "unknown";
 }
 

@@ -38,6 +38,15 @@ def valid_admin_config(count: int = 3):
             "http_reconnect_delay_max_seconds": 5,
             "restart_delay_seconds": 5,
         },
+        "workers": {
+            "enabled": False,
+            "mode": "remux",
+            "output_template": "",
+            "rtsp_transport": "tcp",
+            "restart_delay_seconds": 5,
+            "start_grace_seconds": 2,
+            "wall_input_preflight": False,
+        },
         "inputs": [
             {
                 "name": f"camera-{index + 1}",
@@ -73,6 +82,7 @@ class AdminConfigTests(unittest.TestCase):
             saved_text = path.read_text(encoding="utf-8")
 
         self.assertEqual(len(saved["inputs"]), 5)
+        self.assertIn("workers", saved)
         self.assertTrue(loaded["valid"])
         self.assertEqual(len(loaded["config"]["inputs"]), 5)
         self.assertIn("rtsp://user:pass@", saved_text)

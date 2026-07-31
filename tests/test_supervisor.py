@@ -37,6 +37,34 @@ def make_config():
     )
 
 
+def make_worker_config():
+    return parse_config(
+        {
+            "output": {
+                "url": "rtsp://192.168.64.10:8554/camera_wall",
+                "width": 1920,
+                "height": 1080,
+            },
+            "workers": {
+                "enabled": True,
+                "mode": "remux",
+                "wall_input_preflight": False,
+            },
+            "inputs": [
+                {
+                    "name": "camera-1",
+                    "enabled": True,
+                    "url": "rtsp://camera-1/stream1",
+                    "x": 0,
+                    "y": 0,
+                    "width": 960,
+                    "height": 540,
+                },
+            ],
+        }
+    )
+
+
 class SupervisorTests(unittest.TestCase):
     @patch.dict("os.environ", {"CAMERA_WALL_GPU_STATS_ENABLED": "false"})
     def test_preflight_omits_failed_inputs(self) -> None:
@@ -61,6 +89,14 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(summary["active_inputs"], 1)
         self.assertEqual(summary["offline_inputs"], 1)
         self.assertTrue(summary["input_preflight"])
+
+    def test_runtime_summary_reports_workers(self) -> None:
+        summary = _runtime_summary(make_worker_config(), {"camera-1"}, False)
+
+        self.assertEqual(summary["workers"], "remux")
+        self.assertEqual(summary["worker_inputs"], 1)
+        self.assertFalse(summary["input_preflight"])
+        self.assertFalse(summary["worker_wall_preflight"])
 
 
 if __name__ == "__main__":

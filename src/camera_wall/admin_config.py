@@ -37,6 +37,15 @@ DEFAULT_ADMIN_CONFIG: dict[str, Any] = {
         "http_reconnect_delay_max_seconds": 5,
         "restart_delay_seconds": 5,
     },
+    "workers": {
+        "enabled": False,
+        "mode": "remux",
+        "output_template": "",
+        "rtsp_transport": "tcp",
+        "restart_delay_seconds": 5,
+        "start_grace_seconds": 2,
+        "wall_input_preflight": False,
+    },
     "inputs": [],
 }
 
@@ -87,12 +96,15 @@ def normalize_admin_config(raw: Any) -> dict[str, Any]:
     normalized = deepcopy(DEFAULT_ADMIN_CONFIG)
     output = raw.get("output", {})
     ffmpeg = raw.get("ffmpeg", {})
+    workers = raw.get("workers", {})
     inputs = raw.get("inputs", [])
 
     if not isinstance(output, Mapping):
         raise ConfigError("output must be a mapping")
     if not isinstance(ffmpeg, Mapping):
         raise ConfigError("ffmpeg must be a mapping")
+    if not isinstance(workers, Mapping):
+        raise ConfigError("workers must be a mapping")
     if not isinstance(inputs, list):
         raise ConfigError("inputs must be a list")
 
@@ -102,6 +114,9 @@ def normalize_admin_config(raw: Any) -> dict[str, Any]:
     for key in normalized["ffmpeg"]:
         if key in ffmpeg:
             normalized["ffmpeg"][key] = ffmpeg[key]
+    for key in normalized["workers"]:
+        if key in workers:
+            normalized["workers"][key] = workers[key]
 
     normalized["inputs"] = [_normalize_input(item, index) for index, item in enumerate(inputs)]
     return normalized
@@ -137,6 +152,15 @@ def app_config_to_dict(config: AppConfig) -> dict[str, Any]:
             "input_timeout_seconds": config.ffmpeg.input_timeout_seconds,
             "http_reconnect_delay_max_seconds": config.ffmpeg.http_reconnect_delay_max_seconds,
             "restart_delay_seconds": config.ffmpeg.restart_delay_seconds,
+        },
+        "workers": {
+            "enabled": config.workers.enabled,
+            "mode": config.workers.mode,
+            "output_template": config.workers.output_template,
+            "rtsp_transport": config.workers.rtsp_transport,
+            "restart_delay_seconds": config.workers.restart_delay_seconds,
+            "start_grace_seconds": config.workers.start_grace_seconds,
+            "wall_input_preflight": config.workers.wall_input_preflight,
         },
         "inputs": [
             {
