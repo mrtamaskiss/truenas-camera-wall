@@ -326,9 +326,9 @@ def build_decoder_command(settings: SlotSettings) -> list[str]:
         "-flags",
         "low_delay",
         "-probesize",
-        "32768",
+        "262144",
         "-analyzeduration",
-        "1000000",
+        "2000000",
     ]
     if settings.input_hwaccel == "vaapi":
         args.extend(
@@ -410,7 +410,7 @@ def build_encoder_command(settings: SlotSettings) -> list[str]:
         "-bufsize",
         _double_bitrate(settings.bitrate),
         "-g",
-        str(settings.fps * 2),
+        str(settings.fps),
         "-keyint_min",
         str(settings.fps),
         "-bf",

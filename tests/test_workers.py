@@ -115,7 +115,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(slots[0].output_url, "udp://127.0.0.1:15100?pkt_size=1316")
         self.assertEqual(
             slots[0].wall_input_url,
-            "udp://127.0.0.1:15100?fifo_size=1024&overrun_nonfatal=1",
+            "udp://127.0.0.1:15100?fifo_size=4096&overrun_nonfatal=1",
         )
         self.assertIn("-f", slots[0].command)
         self.assertEqual(slots[0].command[slots[0].command.index("-f") + 1], "mpegts")
@@ -155,6 +155,18 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(command[command.index("--bitrate") + 1], "2500k")
         self.assertEqual(slots[0].mode, "stable")
         self.assertIsNone(slots[0].fallback_command)
+
+    def test_stable_worker_bitrate_can_be_overridden(self) -> None:
+        config = make_config(
+            {
+                "mode": "stable",
+                "slot_transport": "udp_mpegts",
+                "stable_slot_bitrate": "4000k",
+            }
+        )
+        command = build_remux_slots(config)[0].command
+
+        self.assertEqual(command[command.index("--bitrate") + 1], "4000k")
 
     def test_http_worker_command_keeps_reconnect_options(self) -> None:
         config = make_config()

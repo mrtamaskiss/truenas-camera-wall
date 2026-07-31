@@ -152,7 +152,8 @@ workers:
   output_template: ""
   wall_input_template: ""
   udp_base_port: 15000
-  udp_fifo_size: 1024
+  udp_fifo_size: 4096
+  stable_slot_bitrate: 2500k
   rtsp_transport: tcp
   fallback_enabled: true
   restart_delay_seconds: 5
@@ -175,7 +176,8 @@ workers:
   output_template: ""
   wall_input_template: ""
   udp_base_port: 15000
-  udp_fifo_size: 1024
+  udp_fifo_size: 4096
+  stable_slot_bitrate: 2500k
   rtsp_transport: tcp
   fallback_enabled: true
   restart_delay_seconds: 5
@@ -197,12 +199,12 @@ udp://127.0.0.1:15002?pkt_size=1316
 The wall reads matching local UDP inputs with larger receive buffers:
 
 ```text
-udp://127.0.0.1:15000?fifo_size=1024&overrun_nonfatal=1
-udp://127.0.0.1:15001?fifo_size=1024&overrun_nonfatal=1
-udp://127.0.0.1:15002?fifo_size=1024&overrun_nonfatal=1
+udp://127.0.0.1:15000?fifo_size=4096&overrun_nonfatal=1
+udp://127.0.0.1:15001?fifo_size=4096&overrun_nonfatal=1
+udp://127.0.0.1:15002?fifo_size=4096&overrun_nonfatal=1
 ```
 
-Lower `udp_fifo_size` reduces latency; raise it only if local UDP slot packet drops show up in the logs. Keep `wall_input_template` empty unless you intentionally override the generated low-latency URLs.
+Lower `udp_fifo_size` reduces latency, but values that are too low can cause `Circular buffer overrun` and corrupt MPEG-TS packets. Raise it if local UDP slot packet drops show up in the logs. Keep `wall_input_template` empty unless you intentionally override the generated low-latency URLs.
 
 You can still use the older RTSP worker-slot mode:
 
@@ -314,8 +316,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.11.1 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.11.1
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.11.2 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.11.2
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -358,7 +360,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.11.1
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.11.2
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host

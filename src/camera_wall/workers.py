@@ -631,6 +631,9 @@ def _progress_interval(config: AppConfig) -> str:
 
 
 def _stable_slot_bitrate(config: AppConfig) -> str:
+    configured = config.workers.stable_slot_bitrate.strip()
+    if configured:
+        return configured
     match = re.match(r"^(\d+)([kKmM]?)$", config.output.bitrate)
     if not match:
         return "1200k"

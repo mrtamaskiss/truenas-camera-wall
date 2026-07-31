@@ -175,6 +175,8 @@ class FfmpegTests(unittest.TestCase):
         self.assertIn("+genpts+nobuffer", command)
         self.assertIn("-flags", command)
         self.assertIn("low_delay", command)
+        self.assertEqual(command[command.index("-probesize") + 1], "262144")
+        self.assertEqual(command[command.index("-analyzeduration") + 1], "2000000")
         self.assertIn("-flush_packets", command)
         self.assertEqual(command[command.index("-flush_packets") + 1], "1")
 

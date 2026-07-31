@@ -234,8 +234,11 @@ function renderOutput() {
     numberField("UDP base port", workers.udp_base_port ?? 15000, (value) =>
       setWorkers("udp_base_port", value)
     ),
-    numberField("UDP FIFO", workers.udp_fifo_size ?? 1024, (value) =>
+    numberField("UDP FIFO", workers.udp_fifo_size ?? 4096, (value) =>
       setWorkers("udp_fifo_size", value)
+    ),
+    textField("Slot bitrate", workers.stable_slot_bitrate || "2500k", (value) =>
+      setWorkers("stable_slot_bitrate", value)
     ),
     selectField(
       "Worker RTSP",
@@ -539,7 +542,8 @@ function ensureWorkers() {
     output_template: "",
     wall_input_template: "",
     udp_base_port: 15000,
-    udp_fifo_size: 1024,
+    udp_fifo_size: 4096,
+    stable_slot_bitrate: "2500k",
     rtsp_transport: "tcp",
     fallback_enabled: true,
     restart_delay_seconds: 5,

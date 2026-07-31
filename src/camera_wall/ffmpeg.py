@@ -48,9 +48,9 @@ def build_ffmpeg_command(
                     "-flags",
                     "low_delay",
                     "-probesize",
-                    "32768",
+                    "262144",
                     "-analyzeduration",
-                    "1000000",
+                    "2000000",
                 ]
             )
         if ffmpeg.input_hwaccel == "vaapi":

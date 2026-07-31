@@ -46,6 +46,8 @@ class SlotWorkerTests(unittest.TestCase):
         self.assertIn("tcp", command)
         self.assertIn("+genpts+nobuffer", command)
         self.assertIn("low_delay", command)
+        self.assertEqual(command[command.index("-probesize") + 1], "262144")
+        self.assertEqual(command[command.index("-analyzeduration") + 1], "2000000")
         self.assertIn("-vf", command)
         filter_graph = command[command.index("-vf") + 1]
         self.assertIn("scale=w=960:h=540:force_original_aspect_ratio=decrease", filter_graph)
@@ -59,6 +61,7 @@ class SlotWorkerTests(unittest.TestCase):
         self.assertIn("repeat-headers=1:scenecut=0", command)
         self.assertIn("-bf", command)
         self.assertEqual(command[command.index("-bf") + 1], "0")
+        self.assertEqual(command[command.index("-g") + 1], "15")
         self.assertIn("-flush_packets", command)
         self.assertIn("-f", command)
         self.assertEqual(command[command.index("-f", command.index("-x264-params")) + 1], "mpegts")
