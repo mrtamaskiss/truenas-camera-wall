@@ -11,7 +11,7 @@ It reads multiple RTSP or HTTP camera inputs, renders them into one H.264 wall s
 - `camera_wall.input_health` tracks enabled, disabled, active, restarting, and failed camera states for the admin UI.
 - `camera_wall.gpu` samples Intel GPU utilization with `intel_gpu_top` when the host exposes the required counters.
 - `camera_wall.diagnostics` probes camera streams, output targets, and local GPU metric access for the admin UI.
-- `camera_wall.workers` optionally starts one lightweight FFmpeg remux worker per camera and publishes fixed intermediate RTSP slots.
+- `camera_wall.workers` optionally starts one per-camera worker in either low-load remux mode or stabilized slot mode.
 - `camera_wall.supervisor` preflights inputs, starts FFmpeg, logs a credential-masked command, and restarts the pipeline when FFmpeg exits, a camera recovers, or the admin UI applies a new config.
 - `camera_wall.web` serves the admin UI and writes the private YAML config mounted at `/config/config.yaml`.
 - Docker healthcheck reports healthy only while the supervised FFmpeg process is alive.
@@ -53,7 +53,7 @@ This project sends video only. If a player path requires audio later, add AAC au
 
 go2rtc is not replaced by this app. In the recommended setup, go2rtc remains the streaming broker: cameras can be normalized behind go2rtc URLs, the camera-wall app publishes one composed wall stream back to go2rtc, and viewers connect to go2rtc instead of the compositor container.
 
-If remux workers use the default `rtsp` slot transport without a custom template, add one empty go2rtc stream per camera slot too:
+If RTSP worker slots are used without a custom template, add one empty go2rtc stream per camera slot too:
 
 ```yaml
 streams:
@@ -95,7 +95,7 @@ The admin UI can edit:
 - RTSP or HTTP camera URLs
 - camera names, labels, enabled state, and cell positions
 - output URL, resolution, FPS, bitrate, encoder, input decode, VAAPI/QSV options
-- optional remux worker settings
+- optional camera worker settings
 - layout templates: auto, 3 wall, 2x2, 5 wall, grid, focus
 - current status, per-camera input health, Intel GPU load, recent logs, masked FFmpeg command, and config download
 - diagnostics for individual camera streams, the go2rtc output target, and Intel GPU metric permissions
@@ -130,25 +130,41 @@ CAMERA_WALL_INPUT_REPROBE_SECONDS=30
 
 This is practical isolation for startup and recovery failures while keeping one compositor process. go2rtc is still the preferred ingest/fanout layer.
 
-## Remux Workers
+## Camera Workers
 
-Remux worker mode is optional and experimental. It starts a separate FFmpeg process for each enabled camera:
+Worker mode is optional. It starts a separate process for each enabled camera so one camera can fail without forcing the whole wall to reconnect.
 
-```text
-camera -> per-camera FFmpeg worker with -c:v copy -> go2rtc worker slot -> wall FFmpeg -> go2rtc camera_wall
-```
-
-The worker normally does not decode or encode video, so the extra CPU/GPU load should be small. It does add one extra local RTSP publish/read path per camera. The main benefit is that each camera connection can restart independently while the wall keeps reading stable slot URLs.
-
-For better camera-failure isolation, use `slot_transport: udp_mpegts` instead of RTSP worker slots:
+For the smoothest failure behavior, use stable workers with local UDP/MPEG-TS slots:
 
 ```text
-camera -> per-camera FFmpeg worker with -c:v copy -> local UDP/MPEG-TS slot -> wall FFmpeg -> go2rtc camera_wall
+camera -> stable slot worker -> local UDP/MPEG-TS slot -> wall FFmpeg -> go2rtc camera_wall
 ```
 
-When a live worker exits or stops producing progress, the supervisor starts a low-bitrate black fallback stream on the same UDP port. While fallback is active, the supervisor probes the real camera URL without stopping fallback, and switches back only after a successful probe. The wall may briefly freeze that tile while the slot switches, but the RTSP subscriber session between go2rtc and the wall input is removed from the middle, so one failed camera is much less likely to take down the whole wall.
+In stable mode, each slot worker keeps writing a fixed-size, fixed-FPS local stream. It decodes the real camera in a restartable child process, repeats the latest live frame while the camera stalls, and switches that tile to an offline label when the frame is stale. The wall compositor keeps reading the same local stream, so one missing camera should not stall the final RTSP output.
 
 Enable it in YAML or from the admin UI:
+
+```yaml
+workers:
+  enabled: true
+  mode: stable
+  slot_transport: udp_mpegts
+  output_template: ""
+  wall_input_template: ""
+  udp_base_port: 15000
+  rtsp_transport: tcp
+  fallback_enabled: true
+  restart_delay_seconds: 5
+  start_grace_seconds: 2
+  retry_live_seconds: 15
+  retry_probe_timeout_seconds: 3
+  stall_timeout_seconds: 3
+  wall_input_preflight: false
+```
+
+Stable mode is heavier than remux mode because every camera is decoded and encoded once before the final compositor. The per-slot streams are local and low-latency, and the final wall output can still use VAAPI/QSV/software according to `output.encoder`.
+
+The lower-load remux mode is still available:
 
 ```yaml
 workers:
@@ -195,7 +211,7 @@ workers:
 
 For RTSP worker slots, every generated worker stream must exist as an empty stream in go2rtc before the worker publishes to it. `{index}` is 1-based, and `{name}` is a URL-safe version of the camera name.
 
-This mode is intentionally remux-only for live camera video. If a camera emits a codec that cannot be republished with `-c:v copy` to the selected slot transport, keep worker mode off for now. A future transcode worker mode would be heavier because it would decode and encode every camera before the wall compositor.
+Remux mode is intentionally copy-only for live camera video. If a camera emits a codec that cannot be republished with `-c:v copy` to the selected slot transport, use `mode: stable` instead.
 
 ## Encoder Selection
 
@@ -294,8 +310,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.10.1 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.10.1
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.11.0 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.11.0
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -319,7 +335,7 @@ streams:
   camera_wall:
 ```
 
-If you enable remux workers with `slot_transport: rtsp`, add the generated worker slots here too, for example `camera_wall_camera-1`, `camera_wall_camera-2`, and `camera_wall_camera-3`. The recommended `slot_transport: udp_mpegts` mode does not need go2rtc intermediate worker slots.
+If you enable worker slots with `slot_transport: rtsp`, add the generated worker slots here too, for example `camera_wall_camera-1`, `camera_wall_camera-2`, and `camera_wall_camera-3`. The recommended `slot_transport: udp_mpegts` mode does not need go2rtc intermediate worker slots.
 
 5. In TrueNAS, open `Apps`.
 
@@ -338,7 +354,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.10.1
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.11.0
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host
@@ -398,10 +414,10 @@ ffplay rtsp://192.168.64.10:8554/camera_wall
 - go2rtc RTSP ingest supports incoming RTSP, but the target stream must exist first with an empty source.
 - Browser compatibility is simplest with H.264 video. This app encodes `yuv420p` for software mode and `nv12` for hardware encoders.
 - RTSP input is forced to TCP by default for camera stability.
-- FFmpeg reconnect options are strongest for HTTP inputs. For RTSP, the supervisor restarts the whole pipeline after FFmpeg exits. `ffmpeg.input_timeout_seconds` is disabled by default because some FFmpeg builds reject `-rw_timeout`.
-- Input preflight prevents startup failure of one RTSP input from blocking the whole wall. Runtime failures can still cause FFmpeg to exit, but the next supervisor cycle re-probes inputs and can publish the wall without the failed camera.
-- RTSP remux workers reduce the need to restart the wall when a camera connection restarts, but the final behavior depends on how go2rtc keeps subscriber sessions alive when a worker publisher disconnects.
-- UDP/MPEG-TS remux workers avoid go2rtc between the worker slot and the wall input, and can publish a black fallback stream on the same local port when a camera fails.
+- FFmpeg reconnect options are strongest for HTTP inputs. For direct RTSP inputs without workers, the supervisor restarts the whole pipeline after FFmpeg exits. `ffmpeg.input_timeout_seconds` is disabled by default because some FFmpeg builds reject `-rw_timeout`.
+- Input preflight prevents startup failure of one direct RTSP input from blocking the whole wall. With stable workers, leave `workers.wall_input_preflight` off so the wall keeps reading the local slot streams.
+- Stable UDP/MPEG-TS workers are the recommended mode when VLC should keep the final wall stream open while one camera fails or recovers.
+- Remux workers reduce load, but they still republish the camera bitstream and may briefly interrupt a wall input when switching between live and fallback publishers.
 - Stream diagnostics use `ffprobe` with a Python-side timeout. A passing probe confirms that FFmpeg can read the camera stream, but it does not guarantee the long-running wall pipeline will never reconnect later.
 - VAAPI uses CQP by default for broad Intel driver compatibility. In this mode `output.bitrate` is only a soft configuration value for non-VAAPI encoders; use `output.vaapi_qp` to tune VAAPI quality.
 - VAAPI input decode can lower CPU use, but it still downloads frames before the CPU filter graph. It is intentionally optional because camera codecs and Intel driver support vary.

@@ -5,6 +5,7 @@ from dataclasses import replace
 import logging
 import re
 import subprocess
+import sys
 import threading
 import time
 from urllib.parse import urlsplit, urlunsplit
@@ -21,6 +22,7 @@ class RemuxSlot:
     output_url: str
     wall_input_url: str
     command: list[str]
+    mode: str = "remux"
     fallback_command: list[str] | None = None
     retry_live_seconds: int = 15
     retry_probe_timeout_seconds: int = 3
@@ -47,6 +49,8 @@ class _WorkerRuntime:
     last_progress_at: float = 0
     next_start_after: float = 0
     next_live_retry_at: float = 0
+    source_state: str | None = None
+    last_source_at: str | None = None
 
 
 class RemuxWorkerManager:
@@ -93,11 +97,18 @@ class RemuxWorkerManager:
                 exit_code = process.poll()
                 if exit_code is None:
                     if self._is_stalled(worker, now):
-                        logging.warning(
-                            "Worker %s has no output progress for %s seconds; switching to fallback",
-                            worker.slot.name,
-                            self._stall_timeout(worker),
-                        )
+                        if worker.process_kind == "stable":
+                            logging.warning(
+                                "Worker %s has no output progress for %s seconds; restarting stable worker",
+                                worker.slot.name,
+                                self._stall_timeout(worker),
+                            )
+                        else:
+                            logging.warning(
+                                "Worker %s has no output progress for %s seconds; switching to fallback",
+                                worker.slot.name,
+                                self._stall_timeout(worker),
+                            )
                         self._stop_process(worker, kill=True)
                         self._handle_exit(worker, -9, now)
                     elif self._should_retry_live(worker, now):
@@ -129,6 +140,8 @@ class RemuxWorkerManager:
                     "last_exit_code": worker.last_exit_code,
                     "last_error": worker.last_error,
                     "started_at": worker.started_at,
+                    "source_state": worker.source_state,
+                    "last_source_at": worker.last_source_at,
                     "source_url": mask_url(worker.slot.input_cfg.url),
                     "output_url": mask_url(worker.slot.output_url),
                     "wall_input_url": mask_url(worker.slot.wall_input_url),
@@ -144,7 +157,8 @@ class RemuxWorkerManager:
         self._start_live(worker)
 
     def _start_live(self, worker: _WorkerRuntime, initial: bool = False) -> None:
-        self._start_worker(worker, "live", worker.slot.command, initial)
+        process_kind = "stable" if worker.slot.mode == "stable" else "live"
+        self._start_worker(worker, process_kind, worker.slot.command, initial)
 
     def _start_fallback(self, worker: _WorkerRuntime) -> None:
         if not worker.slot.fallback_command:
@@ -297,7 +311,7 @@ class RemuxWorkerManager:
         )
 
     def _is_stalled(self, worker: _WorkerRuntime, now: float) -> bool:
-        if worker.process_kind != "live":
+        if worker.process_kind not in {"live", "stable"}:
             return False
         stall_timeout = self._stall_timeout(worker)
         if stall_timeout <= 0:
@@ -362,16 +376,24 @@ def build_remux_slots(config: AppConfig) -> tuple[RemuxSlot, ...]:
         if not input_cfg.enabled:
             continue
         output_url = worker_output_url(config, input_cfg, index)
+        mode = config.workers.mode
+        command = (
+            build_stable_worker_command(config, input_cfg, output_url)
+            if mode == "stable"
+            else build_remux_worker_command(config, input_cfg, output_url)
+        )
+        fallback_command = None
+        if mode == "remux" and config.workers.fallback_enabled:
+            fallback_command = build_fallback_worker_command(config, input_cfg, output_url)
         slots.append(
             RemuxSlot(
                 index=index,
                 input_cfg=input_cfg,
                 output_url=output_url,
                 wall_input_url=worker_wall_input_url(config, input_cfg, index, output_url),
-                command=build_remux_worker_command(config, input_cfg, output_url),
-                fallback_command=build_fallback_worker_command(config, input_cfg, output_url)
-                if config.workers.fallback_enabled
-                else None,
+                command=command,
+                mode=mode,
+                fallback_command=fallback_command,
                 retry_live_seconds=config.workers.retry_live_seconds,
                 retry_probe_timeout_seconds=config.workers.retry_probe_timeout_seconds,
                 stall_timeout_seconds=config.workers.stall_timeout_seconds,
@@ -445,6 +467,58 @@ def build_remux_worker_command(
     )
     args.extend(_worker_output_args(config, output_url))
     return args
+
+
+def build_stable_worker_command(
+    config: AppConfig, input_cfg: InputConfig, output_url: str
+) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "camera_wall.slot_worker",
+        "--ffmpeg-binary",
+        config.ffmpeg.binary,
+        "--log-level",
+        config.ffmpeg.log_level,
+        "--name",
+        input_cfg.name,
+        "--input-url",
+        input_cfg.url,
+        "--output-url",
+        output_url,
+        "--width",
+        str(input_cfg.width),
+        "--height",
+        str(input_cfg.height),
+        "--fps",
+        str(config.output.fps),
+        "--preserve-aspect",
+        "true" if input_cfg.preserve_aspect else "false",
+        "--pad-color",
+        input_cfg.pad_color,
+        "--offline-text",
+        f"{input_cfg.label or input_cfg.name} offline",
+        "--input-rtsp-transport",
+        config.ffmpeg.input_rtsp_transport,
+        "--input-hwaccel",
+        config.ffmpeg.input_hwaccel,
+        "--hwaccel-device",
+        config.ffmpeg.hwaccel_device,
+        "--input-timeout-seconds",
+        str(config.ffmpeg.input_timeout_seconds),
+        "--http-reconnect-delay-max-seconds",
+        str(config.ffmpeg.http_reconnect_delay_max_seconds),
+        "--slot-transport",
+        config.workers.slot_transport,
+        "--worker-rtsp-transport",
+        config.workers.rtsp_transport,
+        "--restart-delay-seconds",
+        str(config.workers.restart_delay_seconds),
+        "--stall-timeout-seconds",
+        str(config.workers.stall_timeout_seconds),
+        "--bitrate",
+        _stable_slot_bitrate(config),
+    ]
 
 
 def build_fallback_worker_command(
@@ -556,6 +630,22 @@ def _progress_interval(config: AppConfig) -> str:
     return str(max(1, min(5, timeout // 2 or 1)))
 
 
+def _stable_slot_bitrate(config: AppConfig) -> str:
+    match = re.match(r"^(\d+)([kKmM]?)$", config.output.bitrate)
+    if not match:
+        return "1200k"
+    amount_text, suffix = match.groups()
+    amount = int(amount_text)
+    count = max(1, len(config.enabled_inputs))
+    if suffix.lower() == "m":
+        kbps = amount * 1000 // count
+    elif suffix.lower() == "k":
+        kbps = amount // count
+    else:
+        kbps = amount // 1000 // count
+    return f"{max(500, kbps)}k"
+
+
 def _derive_output_url(output_url: str, slug: str) -> str:
     parsed = urlsplit(output_url)
     base_path = parsed.path.rstrip("/") or "/camera_wall"
@@ -601,10 +691,21 @@ def _log_worker_output(
     for raw_line in process.stdout:
         line = raw_line.rstrip()
         if line:
+            if _update_worker_state_line(line, worker):
+                continue
             if _is_progress_line(line):
                 worker.last_progress_at = time.monotonic()
                 continue
             logging.warning("worker %s %s", name, mask_text(line))
+
+
+def _update_worker_state_line(line: str, worker: _WorkerRuntime) -> bool:
+    if not line.startswith("camera_wall_source="):
+        return False
+    worker.last_progress_at = time.monotonic()
+    worker.source_state = line.split("=", 1)[1].strip() or "unknown"
+    worker.last_source_at = _utc_now()
+    return True
 
 
 def _is_progress_line(line: str) -> bool:

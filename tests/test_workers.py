@@ -5,8 +5,10 @@ from camera_wall.config import parse_config
 from camera_wall.workers import (
     RemuxWorkerManager,
     _WorkerRuntime,
+    _update_worker_state_line,
     build_remux_slots,
     build_remux_worker_command,
+    build_stable_worker_command,
     build_worker_wall_config,
     worker_output_url,
 )
@@ -134,6 +136,26 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(slots[1].output_url, "udp://127.0.0.1:16002?pkt_size=1316")
         self.assertEqual(slots[1].wall_input_url, "udp://127.0.0.1:16002?fifo_size=1000")
 
+    def test_stable_worker_command_uses_slot_worker(self) -> None:
+        config = make_config({"mode": "stable", "slot_transport": "udp_mpegts"})
+        command = build_stable_worker_command(
+            config,
+            config.inputs[0],
+            "udp://127.0.0.1:15100?pkt_size=1316",
+        )
+        slots = build_remux_slots(config)
+
+        self.assertIn("camera_wall.slot_worker", command)
+        self.assertIn("--input-url", command)
+        self.assertIn("rtsp://user:pass@192.168.64.21/stream1", command)
+        self.assertIn("--offline-text", command)
+        self.assertIn("camera-1 offline", command)
+        self.assertIn("--slot-transport", command)
+        self.assertIn("udp_mpegts", command)
+        self.assertEqual(command[command.index("--bitrate") + 1], "2500k")
+        self.assertEqual(slots[0].mode, "stable")
+        self.assertIsNone(slots[0].fallback_command)
+
     def test_http_worker_command_keeps_reconnect_options(self) -> None:
         config = make_config()
         command = build_remux_worker_command(
@@ -187,6 +209,16 @@ class WorkerTests(unittest.TestCase):
         start_live.assert_not_called()
         self.assertGreater(worker.next_live_retry_at, 10)
         self.assertEqual(worker.process_kind, "fallback")
+
+    def test_worker_state_line_updates_source_state(self) -> None:
+        config = make_config({"mode": "stable", "slot_transport": "udp_mpegts"})
+        slot = build_remux_slots(config)[0]
+        worker = _WorkerRuntime(slot=slot, restart_delay_seconds=5)
+
+        self.assertTrue(_update_worker_state_line("camera_wall_source=offline", worker))
+        self.assertEqual(worker.source_state, "offline")
+        self.assertIsNotNone(worker.last_source_at)
+        self.assertFalse(_update_worker_state_line("progress=continue", worker))
 
 
 if __name__ == "__main__":

@@ -402,8 +402,8 @@ def _input_hwaccel(value: Any) -> str:
 
 def _worker_mode(value: Any) -> str:
     mode = _string(value, "workers.mode").lower()
-    if mode != "remux":
-        raise ConfigError("workers.mode must be remux")
+    if mode not in {"remux", "stable"}:
+        raise ConfigError("workers.mode must be remux or stable")
     return mode
 
 

@@ -200,11 +200,14 @@ function renderOutput() {
     numberField("Restart delay", ffmpeg.restart_delay_seconds, (value) =>
       setFfmpeg("restart_delay_seconds", value)
     ),
-    checkField("Remux workers", workers.enabled, (value) => setWorkers("enabled", value)),
+    checkField("Camera workers", workers.enabled, (value) => setWorkers("enabled", value)),
     selectField(
       "Worker mode",
       workers.mode || "remux",
-      [["remux", "remux"]],
+      [
+        ["stable", "stable"],
+        ["remux", "remux"],
+      ],
       (value) => setWorkers("mode", value)
     ),
     selectField(
@@ -528,8 +531,8 @@ function ensureFfmpeg() {
 function ensureWorkers() {
   state.config.workers ||= {
     enabled: false,
-    mode: "remux",
-    slot_transport: "rtsp",
+    mode: "stable",
+    slot_transport: "udp_mpegts",
     output_template: "",
     wall_input_template: "",
     udp_base_port: 15000,
@@ -837,7 +840,8 @@ function renderWorkerHealth(items) {
     pill.textContent = item.mode ? `${item.state || "unknown"}:${item.mode}` : item.state || "unknown";
     const meta = document.createElement("span");
     const pid = item.pid ? `pid ${item.pid}` : "no pid";
-    meta.textContent = `${pid}, restarts ${item.restarts ?? 0}`;
+    const source = item.source_state ? `, source ${item.source_state}` : "";
+    meta.textContent = `${pid}, restarts ${item.restarts ?? 0}${source}`;
     side.append(pill, meta);
 
     row.append(main, side);

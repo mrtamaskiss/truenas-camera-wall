@@ -215,6 +215,27 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.workers.stall_timeout_seconds, 21)
         self.assertTrue(config.workers.wall_input_preflight)
 
+    def test_parses_stable_workers(self) -> None:
+        raw = {
+            **BASE_CONFIG,
+            "workers": {
+                "enabled": True,
+                "mode": "stable",
+                "slot_transport": "udp_mpegts",
+            },
+        }
+        config = parse_config(
+            raw,
+            {
+                "OUTPUT_URL": "rtsp://192.168.64.10:8554/camera_wall",
+                "CAMERA_1_URL": "rtsp://camera/stream1",
+            },
+        )
+
+        self.assertTrue(config.workers.enabled)
+        self.assertEqual(config.workers.mode, "stable")
+        self.assertEqual(config.workers.slot_transport, "udp_mpegts")
+
     def test_rejects_invalid_worker_mode(self) -> None:
         raw = {
             **BASE_CONFIG,

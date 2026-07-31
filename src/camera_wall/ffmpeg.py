@@ -93,6 +93,7 @@ def build_filter_graph(config: AppConfig, active_input_names: set[str] | None = 
         parts.append(
             f"[{last_label}][v{index}]"
             f"overlay=x={input_cfg.x}:y={input_cfg.y}:shortest=0:eof_action=pass"
+            ":repeatlast=1"
             f"[{next_label}]"
         )
         last_label = next_label

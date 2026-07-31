@@ -22,9 +22,9 @@ ffmpeg:
   restart_delay_seconds: 5
 
 workers:
-  enabled: false
-  mode: remux
-  slot_transport: rtsp
+  enabled: true
+  mode: stable
+  slot_transport: udp_mpegts
   output_template: ""
   wall_input_template: ""
   udp_base_port: 15000
