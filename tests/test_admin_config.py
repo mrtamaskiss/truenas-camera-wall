@@ -6,6 +6,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
 from camera_wall.admin_config import load_admin_config, save_admin_config
 from camera_wall.config import ConfigError
@@ -161,6 +162,43 @@ class WebTests(unittest.TestCase):
                     body = response.read().decode("utf-8")
                 self.assertIn("camera-1", body)
                 self.assertIn("rtsp://user:pass@", body)
+            finally:
+                self._stop_server(server, thread)
+
+    def test_admin_api_returns_diagnostics_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            server, thread = self._start_server(Path(tmp, "config.yaml"), FakeSupervisor())
+            try:
+                with patch(
+                    "camera_wall.web.diagnose_stream",
+                    return_value={"ok": False, "type": "stream", "message": "Connection timed out"},
+                ):
+                    request = self._request(
+                        f"http://127.0.0.1:{server.server_port}/api/diagnostics/stream",
+                        data=json.dumps({"url": "rtsp://camera/stream1"}).encode("utf-8"),
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+
+                self.assertTrue(payload["ok"])
+                self.assertFalse(payload["result"]["ok"])
+                self.assertEqual(payload["result"]["type"], "stream")
+
+                with patch(
+                    "camera_wall.web.diagnose_output",
+                    return_value={"ok": True, "type": "output", "message": "Connected"},
+                ):
+                    request = self._request(
+                        f"http://127.0.0.1:{server.server_port}/api/diagnostics/output",
+                        data=json.dumps({"url": "rtsp://192.168.64.10:8554/camera_wall"}).encode("utf-8"),
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+
+                self.assertTrue(payload["ok"])
+                self.assertTrue(payload["result"]["ok"])
             finally:
                 self._stop_server(server, thread)
 

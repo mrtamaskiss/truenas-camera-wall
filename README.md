@@ -10,6 +10,7 @@ It reads multiple RTSP or HTTP camera inputs, renders them into one H.264 wall s
 - `camera_wall.ffmpeg` builds one FFmpeg command with a generated `filter_complex` graph.
 - `camera_wall.input_health` tracks enabled, disabled, active, restarting, and failed camera states for the admin UI.
 - `camera_wall.gpu` samples Intel GPU utilization with `intel_gpu_top` when the host exposes the required counters.
+- `camera_wall.diagnostics` probes camera streams, output targets, and local GPU metric access for the admin UI.
 - `camera_wall.supervisor` starts FFmpeg, logs a credential-masked command, and restarts the pipeline when FFmpeg exits or the admin UI applies a new config.
 - `camera_wall.web` serves the admin UI and writes the private YAML config mounted at `/config/config.yaml`.
 - Docker healthcheck reports healthy only while the supervised FFmpeg process is alive.
@@ -83,10 +84,21 @@ The admin UI can edit:
 - output URL, resolution, FPS, bitrate, encoder, input decode, VAAPI/QSV options
 - layout templates: auto, 3 wall, 2x2, 5 wall, grid, focus
 - current status, per-camera input health, Intel GPU load, recent logs, masked FFmpeg command, and config download
+- diagnostics for individual camera streams, the go2rtc output target, and Intel GPU metric permissions
 
 Saving in the UI validates the full config, writes `/config/config.yaml`, and restarts only the supervised FFmpeg process. If your current config uses `${CAMERA_1_URL}` style environment variables, saving from the UI writes the resolved URL into the private config file.
 
 The Status panel shows the supervised FFmpeg process state, PID, restart count, encoder, input decode mode, output URL, per-camera input health, GPU load when available, the masked generated FFmpeg command, and an in-memory log tail. Set `CAMERA_WALL_LOG_BUFFER_LINES` to change the retained log line count.
+
+## Diagnostics
+
+The admin UI includes checks that run without saving the config:
+
+- Camera `Test` runs `ffprobe` against the current RTSP/HTTP URL and reports codec, resolution, FPS, pixel format, audio presence, timeout, auth, and connect errors.
+- `Test Output` checks that the RTSP output host and port are reachable, which is useful for confirming go2rtc is listening on `8554`.
+- `Test GPU` checks `/dev/dri`, the configured render device, `intel_gpu_top`, and whether GPU load counters are readable.
+
+Diagnostic results mask credentials before returning data to the browser.
 
 ## Encoder Selection
 
@@ -185,8 +197,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.5.0 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.5.0
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.6.0 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.6.0
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -227,7 +239,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.5.0
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.6.0
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host
@@ -286,6 +298,7 @@ ffplay rtsp://192.168.64.10:8554/camera_wall
 - RTSP input is forced to TCP by default for camera stability.
 - FFmpeg reconnect options are strongest for HTTP inputs. For RTSP, the supervisor restarts the whole pipeline after FFmpeg exits. `ffmpeg.input_timeout_seconds` is disabled by default because some FFmpeg builds reject `-rw_timeout`.
 - Per-camera input health is best-effort with the current single FFmpeg process. Startup failure of one RTSP input can still restart the whole wall; the offline tile placeholder is visible when FFmpeg can keep the wall graph alive without that overlay.
+- Stream diagnostics use `ffprobe` with a Python-side timeout. A passing probe confirms that FFmpeg can read the camera stream, but it does not guarantee the long-running wall pipeline will never reconnect later.
 - VAAPI uses CQP by default for broad Intel driver compatibility. In this mode `output.bitrate` is only a soft configuration value for non-VAAPI encoders; use `output.vaapi_qp` to tune VAAPI quality.
 - VAAPI input decode can lower CPU use, but it still downloads frames before the CPU filter graph. It is intentionally optional because camera codecs and Intel driver support vary.
 - GPU load is sampled with `intel_gpu_top`; unsupported metrics or missing perf counter permissions are reported as unavailable instead of failing the service.

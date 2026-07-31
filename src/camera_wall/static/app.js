@@ -5,6 +5,11 @@ const state = {
   busy: false,
   status: null,
   logs: [],
+  diagnostics: {
+    streams: {},
+    output: null,
+    gpu: null,
+  },
   toastTimer: null,
 };
 
@@ -18,6 +23,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("refreshLogsButton").addEventListener("click", loadLogs);
   $("copyCommandButton").addEventListener("click", copyCommand);
   $("downloadConfigButton").addEventListener("click", downloadConfig);
+  $("testOutputButton").addEventListener("click", testOutput);
+  $("testGpuButton").addEventListener("click", testGpu);
   loadConfig();
   refreshStatus();
   setInterval(refreshStatus, 3000);
@@ -111,6 +118,7 @@ function renderAll() {
   renderCameras();
   renderPreview();
   renderStatus(state.status);
+  renderDiagnosticsPanel();
   renderLogs();
 }
 
@@ -210,8 +218,11 @@ function cameraCard(camera, index) {
   title.textContent = camera.name || `camera-${index + 1}`;
   headLeft.append(enabled, title);
 
+  const actions = element("div", "camera-actions");
+  const test = button("Test", "secondary", () => testCamera(index));
   const remove = button("Remove", "danger", () => removeCamera(index));
-  head.append(headLeft, remove);
+  actions.append(test, remove);
+  head.append(headLeft, actions);
 
   const grid = element("div", "camera-grid");
   const name = textField("Name", camera.name, (value) => {
@@ -234,6 +245,8 @@ function cameraCard(camera, index) {
 
   grid.append(name, label, url, showLabel, preserve, padColor, x, y, width, height);
   card.append(head, grid);
+  const result = state.diagnostics.streams[index];
+  if (result) card.append(diagnosticResult(result));
   return card;
 }
 
@@ -604,6 +617,8 @@ function setBusy(value) {
   $("saveButton").disabled = value;
   $("restartButton").disabled = value;
   $("refreshLogsButton").disabled = value;
+  $("testOutputButton").disabled = value;
+  $("testGpuButton").disabled = value;
 }
 
 function renderStatus(status) {
@@ -644,6 +659,7 @@ function renderStatus(status) {
   if (gpu.error) items.push(["GPU note", gpu.error]);
   items.forEach(([label, value]) => grid.append(statusCard(label, value)));
   renderInputHealth(status.input_health || []);
+  renderDiagnosticsPanel();
   command.textContent = status.last_command || "No command yet";
 }
 
@@ -695,6 +711,163 @@ function renderInputHealth(items) {
     row.append(main, side);
     panel.append(row);
   });
+}
+
+async function testCamera(index) {
+  const camera = ensureInputs()[index];
+  if (!camera?.url) {
+    showToast("Camera URL is empty", true);
+    return;
+  }
+  state.diagnostics.streams[index] = {
+    pending: true,
+    type: "stream",
+    message: "Testing stream...",
+    name: camera.name || `camera-${index + 1}`,
+  };
+  renderCameras();
+  try {
+    const data = await requestJson("/api/diagnostics/stream", {
+      method: "POST",
+      body: JSON.stringify({
+        url: camera.url,
+        name: camera.name || `camera-${index + 1}`,
+        rtsp_transport: ensureFfmpeg().input_rtsp_transport || "tcp",
+        timeout_seconds: 8,
+      }),
+    });
+    state.diagnostics.streams[index] = data.result;
+    renderCameras();
+    showToast(data.result.ok ? "Stream OK" : data.result.message, !data.result.ok);
+  } catch (error) {
+    state.diagnostics.streams[index] = {
+      ok: false,
+      type: "stream",
+      message: error.message,
+      name: camera.name || `camera-${index + 1}`,
+    };
+    renderCameras();
+    showToast(error.message, true);
+  }
+}
+
+async function testOutput() {
+  const url = ensureOutput().url;
+  if (!url) {
+    showToast("Output URL is empty", true);
+    return;
+  }
+  state.diagnostics.output = { pending: true, type: "output", message: "Testing output target..." };
+  renderDiagnosticsPanel();
+  try {
+    const data = await requestJson("/api/diagnostics/output", {
+      method: "POST",
+      body: JSON.stringify({ url, timeout_seconds: 5 }),
+    });
+    state.diagnostics.output = data.result;
+    renderDiagnosticsPanel();
+    showToast(data.result.ok ? "Output target reachable" : data.result.message, !data.result.ok);
+  } catch (error) {
+    state.diagnostics.output = { ok: false, type: "output", message: error.message };
+    renderDiagnosticsPanel();
+    showToast(error.message, true);
+  }
+}
+
+async function testGpu() {
+  const output = ensureOutput();
+  const ffmpeg = ensureFfmpeg();
+  const device = output.vaapi_device || ffmpeg.hwaccel_device || "/dev/dri/renderD128";
+  state.diagnostics.gpu = { pending: true, type: "gpu", message: "Testing GPU metrics..." };
+  renderDiagnosticsPanel();
+  try {
+    const data = await requestJson("/api/diagnostics/gpu", {
+      method: "POST",
+      body: JSON.stringify({ device, sample_ms: 1000 }),
+    });
+    state.diagnostics.gpu = data.result;
+    renderDiagnosticsPanel();
+    showToast(data.result.ok ? "GPU metrics OK" : data.result.message, !data.result.ok);
+  } catch (error) {
+    state.diagnostics.gpu = { ok: false, type: "gpu", message: error.message };
+    renderDiagnosticsPanel();
+    showToast(error.message, true);
+  }
+}
+
+function renderDiagnosticsPanel() {
+  const panel = $("diagnosticsPanel");
+  panel.replaceChildren();
+  const results = [state.diagnostics.output, state.diagnostics.gpu].filter(Boolean);
+  if (!results.length) return;
+  results.forEach((result) => panel.append(diagnosticResult(result)));
+}
+
+function diagnosticResult(result) {
+  const item = element("div", `diagnostic-result ${diagnosticClass(result)}`);
+  const head = element("div", "diagnostic-head");
+  const title = document.createElement("strong");
+  const pill = element("span", `input-health-pill ${diagnosticClass(result)}`);
+  title.textContent = diagnosticTitle(result);
+  pill.textContent = result.pending ? "running" : result.ok ? "ok" : "failed";
+  head.append(title, pill);
+
+  const body = element("div", "diagnostic-body");
+  body.append(diagnosticLine(result.message || "-"));
+  diagnosticDetails(result).forEach((line) => body.append(diagnosticLine(line)));
+  item.append(head, body);
+  return item;
+}
+
+function diagnosticTitle(result) {
+  if (result.type === "stream") return result.name || "Stream";
+  if (result.type === "output") return "Output target";
+  if (result.type === "gpu") return "GPU diagnostics";
+  return "Diagnostics";
+}
+
+function diagnosticDetails(result) {
+  if (result.pending) return [];
+  if (result.type === "stream") {
+    const video = result.video || {};
+    const details = [];
+    if (video.codec) details.push(`Video: ${video.codec} ${video.width || "?"}x${video.height || "?"}`);
+    if (video.fps) details.push(`FPS: ${video.fps}`);
+    if (video.pix_fmt) details.push(`Pixel format: ${video.pix_fmt}`);
+    details.push(`Audio: ${result.audio_present ? result.audio_codec || "present" : "none"}`);
+    if (result.error) details.push(result.error);
+    return details;
+  }
+  if (result.type === "output") {
+    const details = [];
+    if (result.host && result.port) details.push(`${result.host}:${result.port}`);
+    if (result.error) details.push(result.error);
+    return details;
+  }
+  if (result.type === "gpu") {
+    const stats = result.stats || {};
+    const details = [];
+    if (stats.source) details.push(`Source: ${stats.source}`);
+    if (stats.load_percent !== null && stats.load_percent !== undefined) {
+      details.push(`Load: ${formatPercent(stats.load_percent)}`);
+    }
+    (result.checks || []).forEach((check) => {
+      details.push(`${check.ok ? "OK" : "FAIL"} ${check.name}: ${check.detail}`);
+    });
+    return details;
+  }
+  return [];
+}
+
+function diagnosticLine(text) {
+  const line = document.createElement("span");
+  line.textContent = text;
+  return line;
+}
+
+function diagnosticClass(result) {
+  if (result.pending) return "warn";
+  return result.ok ? "ok" : "bad";
 }
 
 function inputHealthFor(index, camera) {

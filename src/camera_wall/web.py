@@ -13,6 +13,14 @@ from urllib.parse import parse_qs, urlparse
 
 from .admin_config import dump_yaml, load_admin_config, save_admin_config
 from .config import ConfigError
+from .diagnostics import (
+    diagnose_gpu,
+    diagnose_output,
+    diagnose_stream,
+    gpu_request_from_payload,
+    output_request_from_payload,
+    stream_request_from_payload,
+)
 from .log_buffer import log_payload
 
 
@@ -100,6 +108,15 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.server.supervisor.request_restart("admin restart")
             self._send_json({"ok": True, "status": self.server.supervisor.status_snapshot()})
             return
+        if path == "/api/diagnostics/stream":
+            self._handle_stream_diagnostics()
+            return
+        if path == "/api/diagnostics/output":
+            self._handle_output_diagnostics()
+            return
+        if path == "/api/diagnostics/gpu":
+            self._handle_gpu_diagnostics()
+            return
         self._send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def log_message(self, fmt: str, *args: object) -> None:
@@ -131,6 +148,30 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 "status": self.server.supervisor.status_snapshot(),
             }
         )
+
+    def _handle_stream_diagnostics(self) -> None:
+        try:
+            request = stream_request_from_payload(self._read_json_body())
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json({"ok": True, "result": diagnose_stream(request)})
+
+    def _handle_output_diagnostics(self) -> None:
+        try:
+            url, timeout_seconds = output_request_from_payload(self._read_json_body())
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json({"ok": True, "result": diagnose_output(url, timeout_seconds)})
+
+    def _handle_gpu_diagnostics(self) -> None:
+        try:
+            device, sample_ms = gpu_request_from_payload(self._read_json_body())
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        self._send_json({"ok": True, "result": diagnose_gpu(device, sample_ms)})
 
     def _read_json_body(self) -> Any:
         length_text = self.headers.get("Content-Length", "0")

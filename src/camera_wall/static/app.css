@@ -319,6 +319,12 @@ h3 {
   min-width: 0;
 }
 
+.camera-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .camera-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -379,6 +385,66 @@ h3 {
   display: grid;
   gap: 8px;
   margin: 0 0 12px;
+}
+
+.diagnostics-panel {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.diagnostic-result {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+}
+
+.camera-card .diagnostic-result {
+  margin: 0 14px 14px;
+  box-shadow: none;
+}
+
+.diagnostic-result.ok {
+  border-color: #a6d9c2;
+}
+
+.diagnostic-result.warn {
+  border-color: #f4d19f;
+}
+
+.diagnostic-result.bad {
+  border-color: #efb4ad;
+}
+
+.diagnostic-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.diagnostic-head strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.diagnostic-body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.diagnostic-body span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .input-health-row {
@@ -570,7 +636,8 @@ h3 {
 
   .section-heading,
   .layout-tools,
-  .status-tools {
+  .status-tools,
+  .camera-actions {
     align-items: stretch;
     flex-direction: column;
   }
@@ -578,6 +645,7 @@ h3 {
   button,
   .layout-tools,
   .status-tools,
+  .camera-actions,
   .input-health-row,
   .actions {
     width: 100%;
