@@ -53,6 +53,7 @@ DEFAULT_ADMIN_CONFIG: dict[str, Any] = {
         "retry_live_seconds": 15,
         "retry_probe_timeout_seconds": 3,
         "stall_timeout_seconds": 3,
+        "freeze_timeout_seconds": 20,
         "wall_input_preflight": False,
     },
     "inputs": [],
@@ -178,6 +179,7 @@ def app_config_to_dict(config: AppConfig) -> dict[str, Any]:
             "retry_live_seconds": config.workers.retry_live_seconds,
             "retry_probe_timeout_seconds": config.workers.retry_probe_timeout_seconds,
             "stall_timeout_seconds": config.workers.stall_timeout_seconds,
+            "freeze_timeout_seconds": config.workers.freeze_timeout_seconds,
             "wall_input_preflight": config.workers.wall_input_preflight,
         },
         "inputs": [

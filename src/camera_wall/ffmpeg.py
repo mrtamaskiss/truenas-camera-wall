@@ -45,12 +45,18 @@ def build_ffmpeg_command(
         if _low_latency_inputs(config):
             args.extend(
                 [
+                    "-avioflags",
+                    "direct",
                     "-flags",
                     "low_delay",
+                    "-max_delay",
+                    "0",
                     "-probesize",
                     "262144",
                     "-analyzeduration",
                     "2000000",
+                    "-use_wallclock_as_timestamps",
+                    "1",
                 ]
             )
         if ffmpeg.input_hwaccel == "vaapi":
@@ -66,6 +72,8 @@ def build_ffmpeg_command(
             )
         if _is_rtsp_url(input_cfg.url):
             args.extend(["-rtsp_transport", ffmpeg.input_rtsp_transport])
+            if _low_latency_inputs(config):
+                args.extend(["-reorder_queue_size", "0"])
         if _is_http_url(input_cfg.url):
             args.extend(
                 [
@@ -294,7 +302,7 @@ def _double_bitrate(value: str) -> str:
 
 def _input_fflags(config: AppConfig) -> str:
     if _low_latency_inputs(config):
-        return "+genpts+nobuffer"
+        return "+genpts+nobuffer+discardcorrupt"
     return "+genpts"
 
 

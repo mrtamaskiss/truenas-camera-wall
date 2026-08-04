@@ -29,6 +29,11 @@ class CameraRuntime:
     frame: bytes | None = None
     frame_at: float = 0
     decoder_started_at: float = 0
+    last_read_at: float = 0
+    fast_frame_streak: int = 0
+    normal_frame_streak: int = 0
+    catching_up: bool = False
+    catching_up_until: float = 0
     next_start_at: float = 0
     state: str = "offline"
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -121,11 +126,14 @@ class DirectCompositor:
         if timeout <= 0:
             return False
         with camera.lock:
-            reference = (
-                camera.frame_at
-                if camera.frame_at > camera.decoder_started_at
-                else camera.decoder_started_at
-            )
+            if camera.catching_up and camera.last_read_at > camera.decoder_started_at:
+                reference = camera.last_read_at
+            else:
+                reference = (
+                    camera.frame_at
+                    if camera.frame_at > camera.decoder_started_at
+                    else camera.decoder_started_at
+                )
         return now - reference > timeout
 
     def _start_decoder(self, camera: CameraRuntime) -> None:
@@ -145,11 +153,29 @@ class DirectCompositor:
             self._set_camera_state(camera, "offline")
             return
 
+        now = time.monotonic()
+        had_previous_decoder = camera.decoder_started_at > 0
+        catchup_seconds = (
+            self.config.workers.freeze_timeout_seconds if had_previous_decoder else 0
+        )
+        with camera.lock:
+            camera.frame = None
+            camera.frame_at = 0
+            camera.decoder_started_at = now
+            camera.last_read_at = 0
+            camera.fast_frame_streak = 0
+            camera.normal_frame_streak = 0
+            camera.catching_up = catchup_seconds > 0
+            camera.catching_up_until = now + catchup_seconds if catchup_seconds > 0 else 0
         camera.process = process
-        camera.decoder_started_at = time.monotonic()
         camera.reader = threading.Thread(
             target=_read_camera_frames,
-            args=(camera, tile_frame_size(camera.config)),
+            args=(
+                camera,
+                tile_frame_size(camera.config),
+                self.config.output.fps,
+                self.config.workers.freeze_timeout_seconds,
+            ),
             name=f"compose-{camera.config.name}-decoder",
             daemon=True,
         )
@@ -162,6 +188,12 @@ class DirectCompositor:
         camera.reader.start()
         camera.stderr_reader.start()
         logging.info("camera %s decoder started with pid %s", camera.config.name, process.pid)
+        if catchup_seconds > 0:
+            logging.info(
+                "camera %s holding tile offline for %s seconds while seeking live edge",
+                camera.config.name,
+                catchup_seconds,
+            )
 
     def _stop_decoder(self, camera: CameraRuntime) -> None:
         process = camera.process
@@ -174,6 +206,14 @@ class DirectCompositor:
         camera.process = None
         camera.reader = None
         camera.stderr_reader = None
+        with camera.lock:
+            camera.frame = None
+            camera.frame_at = 0
+            camera.last_read_at = 0
+            camera.fast_frame_streak = 0
+            camera.normal_frame_streak = 0
+            camera.catching_up = False
+            camera.catching_up_until = 0
 
     def _stop_decoders(self) -> None:
         for camera in self.cameras:
@@ -262,13 +302,19 @@ def build_camera_decoder_command(config: AppConfig, input_cfg: InputConfig) -> l
         "-thread_queue_size",
         "512",
         "-fflags",
-        "+genpts+nobuffer",
+        "+genpts+nobuffer+discardcorrupt",
+        "-avioflags",
+        "direct",
         "-flags",
         "low_delay",
+        "-max_delay",
+        "0",
         "-probesize",
         "262144",
         "-analyzeduration",
         "2000000",
+        "-use_wallclock_as_timestamps",
+        "1",
     ]
     if ffmpeg.input_hwaccel == "vaapi":
         args.extend(
@@ -283,6 +329,7 @@ def build_camera_decoder_command(config: AppConfig, input_cfg: InputConfig) -> l
         )
     if _is_rtsp_url(input_cfg.url):
         args.extend(["-rtsp_transport", ffmpeg.input_rtsp_transport])
+        args.extend(["-reorder_queue_size", "0"])
     if _is_http_url(input_cfg.url):
         args.extend(
             [
@@ -335,12 +382,13 @@ def compose_frame(
         with camera.lock:
             live_frame = camera.frame
             frame_at = camera.frame_at
-        if live_frame and (timeout <= 0 or now - frame_at <= timeout):
+            catching_up = camera.catching_up
+        if live_frame and not catching_up and (timeout <= 0 or now - frame_at <= timeout):
             frame = live_frame
             state = "live"
         else:
             frame = offline_frames[input_cfg.name]
-            state = "offline"
+            state = "catching-up" if catching_up else "offline"
         if camera.state != state:
             camera.state = state
             logging.info("camera %s source is %s", input_cfg.name, state)
@@ -371,6 +419,7 @@ def render_offline_frame(config: AppConfig, input_cfg: InputConfig) -> bytes:
         worker_rtsp_transport=config.workers.rtsp_transport,
         restart_delay_seconds=config.workers.restart_delay_seconds,
         stall_timeout_seconds=config.workers.stall_timeout_seconds,
+        freeze_timeout_seconds=config.workers.freeze_timeout_seconds,
         bitrate=config.workers.stable_slot_bitrate,
     )
     command = build_offline_frame_command(settings)
@@ -438,7 +487,12 @@ def _copy_tile(
         ]
 
 
-def _read_camera_frames(camera: CameraRuntime, size: int) -> None:
+def _read_camera_frames(
+    camera: CameraRuntime,
+    size: int,
+    fps: int,
+    catchup_timeout_seconds: int,
+) -> None:
     process = camera.process
     if not process or not process.stdout:
         return
@@ -446,9 +500,64 @@ def _read_camera_frames(camera: CameraRuntime, size: int) -> None:
         frame = _read_exact(process.stdout, size)
         if frame is None:
             return
+        now = time.monotonic()
         with camera.lock:
-            camera.frame = frame
-            camera.frame_at = time.monotonic()
+            catching_up = _update_catchup_state(camera, now, fps, catchup_timeout_seconds)
+            if not catching_up:
+                camera.frame = frame
+                camera.frame_at = now
+
+
+def _update_catchup_state(
+    camera: CameraRuntime,
+    now: float,
+    fps: int,
+    catchup_timeout_seconds: int,
+) -> bool:
+    expected_interval = 1 / max(1, fps)
+    fast_threshold = expected_interval * 0.4
+    normal_threshold = expected_interval * 0.65
+    previous = camera.last_read_at
+    camera.last_read_at = now
+    if previous <= 0:
+        return camera.catching_up
+
+    interval = now - previous
+    if interval < fast_threshold:
+        camera.fast_frame_streak += 1
+        camera.normal_frame_streak = 0
+    elif interval >= normal_threshold:
+        camera.normal_frame_streak += 1
+        camera.fast_frame_streak = 0
+
+    if catchup_timeout_seconds <= 0:
+        camera.catching_up = False
+        camera.catching_up_until = 0
+        return False
+
+    start_streak = max(5, fps // 2)
+    stop_streak = max(5, fps)
+    hold_active = camera.catching_up_until > 0 and now < camera.catching_up_until
+    if not camera.catching_up and camera.fast_frame_streak >= start_streak:
+        camera.catching_up = True
+        camera.catching_up_until = now + catchup_timeout_seconds
+        camera.frame = None
+        camera.frame_at = 0
+        logging.warning(
+            "camera %s appears to be playing buffered backlog; holding tile offline",
+            camera.config.name,
+        )
+    elif (
+        camera.catching_up
+        and not hold_active
+        and camera.normal_frame_streak >= stop_streak
+    ):
+        camera.catching_up = False
+        camera.catching_up_until = 0
+        camera.fast_frame_streak = 0
+        logging.info("camera %s backlog cleared; accepting live frames", camera.config.name)
+
+    return camera.catching_up
 
 
 def _read_exact(stream: object, size: int) -> bytes | None:

@@ -161,10 +161,11 @@ workers:
   retry_live_seconds: 15
   retry_probe_timeout_seconds: 3
   stall_timeout_seconds: 3
+  freeze_timeout_seconds: 20
   wall_input_preflight: false
 ```
 
-Compose mode is heavier than direct FFmpeg overlay because Python copies full YUV frames at the output FPS, but it removes the per-camera slot streams from the final FFmpeg input path. The final wall output can still use VAAPI/QSV/software according to `output.encoder`.
+Compose mode is heavier than direct FFmpeg overlay because Python copies full YUV frames at the output FPS, but it removes the per-camera slot streams from the final FFmpeg input path. On camera reconnect, `freeze_timeout_seconds` keeps that tile offline while the decoder seeks the live edge and drops obvious buffered catch-up bursts. Set it to `0` to disable this hold. The final wall output can still use VAAPI/QSV/software according to `output.encoder`.
 
 Stable slot mode is still available when you want the older per-camera slot topology:
 
@@ -193,6 +194,7 @@ workers:
   retry_live_seconds: 15
   retry_probe_timeout_seconds: 3
   stall_timeout_seconds: 3
+  freeze_timeout_seconds: 20
   wall_input_preflight: false
 ```
 
@@ -215,6 +217,7 @@ workers:
   retry_live_seconds: 15
   retry_probe_timeout_seconds: 3
   stall_timeout_seconds: 3
+  freeze_timeout_seconds: 20
   wall_input_preflight: false
 ```
 
@@ -346,8 +349,8 @@ These steps target TrueNAS SCALE 26 custom apps. TrueNAS documents two custom ap
 1. Build and publish the image to a registry that TrueNAS can pull, for example GHCR:
 
 ```sh
-docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.12.0 .
-docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.12.0
+docker build -t ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.12.1 .
+docker push ghcr.io/YOUR_GITHUB_USER/truenas-camera-wall:0.12.1
 ```
 
 2. On TrueNAS, create a dataset for the app config, for example:
@@ -390,7 +393,7 @@ camera-wall
 ```yaml
 services:
   camera-wall:
-    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.12.0
+    image: ghcr.io/mrtamaskiss/truenas-camera-wall:0.12.1
     container_name: camera-wall
     restart: unless-stopped
     network_mode: host
@@ -452,7 +455,7 @@ ffplay rtsp://192.168.64.10:8554/camera_wall
 - RTSP input is forced to TCP by default for camera stability.
 - FFmpeg reconnect options are strongest for HTTP inputs. For direct RTSP inputs without workers, the supervisor restarts the whole pipeline after FFmpeg exits. `ffmpeg.input_timeout_seconds` is disabled by default because some FFmpeg builds reject `-rw_timeout`.
 - Input preflight prevents startup failure of one direct RTSP input from blocking the whole wall. With compose workers, `workers.wall_input_preflight` is ignored so camera recovery does not restart the final wall encoder.
-- Compose workers are the recommended mode when VLC should keep the final wall stream open while one camera fails or recovers.
+- Compose workers are the recommended mode when VLC should keep the final wall stream open while one camera fails or recovers. They drop the last accepted frame immediately when a camera decoder restarts, use low-latency input flags, and hold reconnecting tiles offline for `workers.freeze_timeout_seconds`.
 - Stable slot workers are useful for diagnostics and lower memory copying, but RTSP/UDP slot interruptions can still make the final FFmpeg input reconnect.
 - Remux workers reduce load, but they still republish the camera bitstream and may briefly interrupt a wall input when switching between live and fallback publishers.
 - Stream diagnostics use `ffprobe` with a Python-side timeout. A passing probe confirms that FFmpeg can read the camera stream, but it does not guarantee the long-running wall pipeline will never reconnect later.

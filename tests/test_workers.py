@@ -26,6 +26,7 @@ def make_config(worker_overrides: dict | None = None):
         "retry_live_seconds": 15,
         "retry_probe_timeout_seconds": 3,
         "stall_timeout_seconds": 3,
+        "freeze_timeout_seconds": 20,
         "wall_input_preflight": False,
     }
     if worker_overrides:
@@ -152,6 +153,7 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("camera-1 offline", command)
         self.assertIn("--slot-transport", command)
         self.assertIn("udp_mpegts", command)
+        self.assertEqual(command[command.index("--freeze-timeout-seconds") + 1], "20")
         self.assertEqual(command[command.index("--bitrate") + 1], "2500k")
         self.assertEqual(slots[0].mode, "stable")
         self.assertIsNone(slots[0].fallback_command)

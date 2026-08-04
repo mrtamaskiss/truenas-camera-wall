@@ -191,6 +191,7 @@ class ConfigTests(unittest.TestCase):
                 "retry_live_seconds": 17,
                 "retry_probe_timeout_seconds": 4,
                 "stall_timeout_seconds": 21,
+                "freeze_timeout_seconds": 31,
                 "wall_input_preflight": True,
             },
         }
@@ -217,6 +218,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.workers.retry_live_seconds, 17)
         self.assertEqual(config.workers.retry_probe_timeout_seconds, 4)
         self.assertEqual(config.workers.stall_timeout_seconds, 21)
+        self.assertEqual(config.workers.freeze_timeout_seconds, 31)
         self.assertTrue(config.workers.wall_input_preflight)
 
     def test_parses_stable_workers(self) -> None:

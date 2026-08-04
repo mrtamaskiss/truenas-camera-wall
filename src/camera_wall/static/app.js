@@ -268,6 +268,9 @@ function renderOutput() {
     numberField("Stall timeout", workers.stall_timeout_seconds ?? 3, (value) =>
       setWorkers("stall_timeout_seconds", value)
     ),
+    numberField("Catch-up hold", workers.freeze_timeout_seconds ?? 20, (value) =>
+      setWorkers("freeze_timeout_seconds", value)
+    ),
     checkField("Preflight worker URLs", workers.wall_input_preflight, (value) =>
       setWorkers("wall_input_preflight", value)
     )
@@ -552,6 +555,7 @@ function ensureWorkers() {
     retry_live_seconds: 15,
     retry_probe_timeout_seconds: 3,
     stall_timeout_seconds: 3,
+    freeze_timeout_seconds: 20,
     wall_input_preflight: false,
   };
   return state.config.workers;

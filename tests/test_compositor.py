@@ -3,6 +3,7 @@ import unittest
 
 from camera_wall.compositor import (
     CameraRuntime,
+    _update_catchup_state,
     build_camera_decoder_command,
     compose_frame,
     tile_frame_size,
@@ -60,6 +61,12 @@ class CompositorTests(unittest.TestCase):
         config = make_config()
         command = build_camera_decoder_command(config, config.inputs[0])
 
+        self.assertIn("+genpts+nobuffer+discardcorrupt", command)
+        self.assertIn("-avioflags", command)
+        self.assertEqual(command[command.index("-avioflags") + 1], "direct")
+        self.assertIn("-reorder_queue_size", command)
+        self.assertEqual(command[command.index("-reorder_queue_size") + 1], "0")
+        self.assertIn("-use_wallclock_as_timestamps", command)
         self.assertIn("-vf", command)
         filter_graph = command[command.index("-vf") + 1]
         self.assertIn("scale=w=2:h=2:force_original_aspect_ratio=decrease", filter_graph)
@@ -95,6 +102,42 @@ class CompositorTests(unittest.TestCase):
         self.assertEqual(v_plane[0], 100)
         self.assertEqual(u_plane[3], 130)
         self.assertEqual(v_plane[3], 140)
+
+    def test_compose_frame_hides_catchup_frames(self) -> None:
+        config = make_config()
+        camera_a = CameraRuntime(config.inputs[0])
+        camera_a.frame = yuv_tile(80, 90, 100)
+        camera_a.frame_at = time.monotonic()
+        camera_a.catching_up = True
+        offline = {
+            "a": yuv_tile(16, 128, 128),
+            "b": yuv_tile(40, 130, 140),
+        }
+
+        frame = compose_frame(config, [camera_a], offline)
+
+        self.assertEqual(frame[0], 16)
+        self.assertEqual(camera_a.state, "catching-up")
+
+    def test_catchup_state_drops_fast_backlog_until_live_rate_returns(self) -> None:
+        camera = CameraRuntime(make_config().inputs[0])
+        now = 100.0
+        camera.last_read_at = now
+
+        for index in range(5):
+            result = _update_catchup_state(camera, now + 0.01 * (index + 1), 10, 20)
+
+        self.assertTrue(result)
+        self.assertTrue(camera.catching_up)
+
+        camera.normal_frame_streak = 0
+        camera.fast_frame_streak = 0
+        camera.catching_up_until = now - 1
+        for index in range(10):
+            result = _update_catchup_state(camera, now + 1 + 0.1 * (index + 1), 10, 20)
+
+        self.assertFalse(result)
+        self.assertFalse(camera.catching_up)
 
 
 if __name__ == "__main__":

@@ -516,6 +516,8 @@ def build_stable_worker_command(
         str(config.workers.restart_delay_seconds),
         "--stall-timeout-seconds",
         str(config.workers.stall_timeout_seconds),
+        "--freeze-timeout-seconds",
+        str(config.workers.freeze_timeout_seconds),
         "--bitrate",
         _stable_slot_bitrate(config),
     ]

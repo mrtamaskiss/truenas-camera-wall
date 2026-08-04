@@ -37,6 +37,7 @@ workers:
   retry_live_seconds: 15
   retry_probe_timeout_seconds: 3
   stall_timeout_seconds: 3
+  freeze_timeout_seconds: 20
   wall_input_preflight: false
 
 inputs:

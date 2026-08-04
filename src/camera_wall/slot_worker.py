@@ -34,6 +34,7 @@ class SlotSettings:
     worker_rtsp_transport: str
     restart_delay_seconds: int
     stall_timeout_seconds: int
+    freeze_timeout_seconds: int
     bitrate: str
 
 
@@ -50,15 +51,79 @@ class LatestFrame:
         self._lock = threading.Lock()
         self._frame: bytes | None = None
         self._updated_at = 0.0
+        self._last_read_at = 0.0
+        self._fast_frame_streak = 0
+        self._normal_frame_streak = 0
+        self._catching_up = False
+        self._catching_up_until = 0.0
 
-    def update(self, frame: bytes) -> None:
+    def reset(self, catchup_seconds: int = 0) -> None:
         with self._lock:
-            self._frame = frame
-            self._updated_at = time.monotonic()
+            now = time.monotonic()
+            self._frame = None
+            self._updated_at = 0.0
+            self._last_read_at = 0.0
+            self._fast_frame_streak = 0
+            self._normal_frame_streak = 0
+            self._catching_up = catchup_seconds > 0
+            self._catching_up_until = now + catchup_seconds if catchup_seconds > 0 else 0.0
 
-    def snapshot(self) -> tuple[bytes | None, float]:
+    def update(self, frame: bytes, fps: int, catchup_timeout_seconds: int) -> None:
+        now = time.monotonic()
         with self._lock:
-            return self._frame, self._updated_at
+            catching_up = self._update_catchup_state(now, fps, catchup_timeout_seconds)
+            if not catching_up:
+                self._frame = frame
+                self._updated_at = now
+
+    def snapshot(self) -> tuple[bytes | None, float, bool, float]:
+        with self._lock:
+            return self._frame, self._updated_at, self._catching_up, self._last_read_at
+
+    def _update_catchup_state(
+        self,
+        now: float,
+        fps: int,
+        catchup_timeout_seconds: int,
+    ) -> bool:
+        if catchup_timeout_seconds <= 0:
+            self._catching_up = False
+            self._catching_up_until = 0.0
+            return False
+
+        expected_interval = 1 / max(1, fps)
+        fast_threshold = expected_interval * 0.4
+        normal_threshold = expected_interval * 0.65
+        previous = self._last_read_at
+        self._last_read_at = now
+        if previous <= 0:
+            return self._catching_up
+
+        interval = now - previous
+        if interval < fast_threshold:
+            self._fast_frame_streak += 1
+            self._normal_frame_streak = 0
+        elif interval >= normal_threshold:
+            self._normal_frame_streak += 1
+            self._fast_frame_streak = 0
+
+        start_streak = max(5, fps // 2)
+        stop_streak = max(5, fps)
+        hold_active = self._catching_up_until > 0 and now < self._catching_up_until
+        if not self._catching_up and self._fast_frame_streak >= start_streak:
+            self._catching_up = True
+            self._catching_up_until = now + catchup_timeout_seconds
+            self._frame = None
+            self._updated_at = 0.0
+        elif (
+            self._catching_up
+            and not hold_active
+            and self._normal_frame_streak >= stop_streak
+        ):
+            self._catching_up = False
+            self._catching_up_until = 0.0
+            self._fast_frame_streak = 0
+        return self._catching_up
 
 
 class StableSlotWorker:
@@ -68,6 +133,7 @@ class StableSlotWorker:
         self.latest_frame = LatestFrame()
         self.encoder: subprocess.Popen[bytes] | None = None
         self.encoder_stderr_reader: threading.Thread | None = None
+        self.decoder_started_once = False
 
     def run(self) -> int:
         offline_frame = self._offline_frame()
@@ -94,8 +160,8 @@ class StableSlotWorker:
                 if self._encoder_exited():
                     self._start_encoder()
 
-                frame, frame_at = self.latest_frame.snapshot()
-                source_state = self._source_state(frame, frame_at)
+                frame, frame_at, catching_up, _last_read_at = self.latest_frame.snapshot()
+                source_state = self._source_state(frame, frame_at, catching_up)
                 output_frame = frame if source_state == "live" and frame else offline_frame
                 if source_state != last_source_state:
                     logging.info("slot %s source is %s", self.settings.name, source_state)
@@ -159,7 +225,9 @@ class StableSlotWorker:
             return None, now + self.settings.restart_delay_seconds
         return decoder, next_decoder_start_at
 
-    def _source_state(self, frame: bytes | None, frame_at: float) -> str:
+    def _source_state(self, frame: bytes | None, frame_at: float, catching_up: bool) -> str:
+        if catching_up:
+            return "catching-up"
         if frame is None:
             return "offline"
         timeout = max(0, self.settings.stall_timeout_seconds)
@@ -171,8 +239,11 @@ class StableSlotWorker:
         timeout = max(0, self.settings.stall_timeout_seconds)
         if timeout <= 0:
             return False
-        _, frame_at = self.latest_frame.snapshot()
-        reference = frame_at if frame_at > decoder.started_at else decoder.started_at
+        _, frame_at, catching_up, last_read_at = self.latest_frame.snapshot()
+        if catching_up and last_read_at > decoder.started_at:
+            reference = last_read_at
+        else:
+            reference = frame_at if frame_at > decoder.started_at else decoder.started_at
         return now - reference > timeout
 
     def _start_decoder(self) -> DecoderRuntime | None:
@@ -190,9 +261,28 @@ class StableSlotWorker:
             logging.error("slot %s FFmpeg binary not found: %s", self.settings.name, command[0])
             return None
 
+        catchup_seconds = (
+            self.settings.freeze_timeout_seconds if self.decoder_started_once else 0
+        )
+        self.latest_frame.reset(catchup_seconds)
+        self.decoder_started_once = True
+        if catchup_seconds > 0:
+            logging.info(
+                "slot %s holding tile offline for %s seconds while seeking live edge",
+                self.settings.name,
+                catchup_seconds,
+            )
+
         reader = threading.Thread(
             target=_read_decoder_frames,
-            args=(self.settings.name, process, self.latest_frame, frame_size(self.settings)),
+            args=(
+                self.settings.name,
+                process,
+                self.latest_frame,
+                frame_size(self.settings),
+                self.settings.fps,
+                self.settings.freeze_timeout_seconds,
+            ),
             name=f"slot-{self.settings.name}-decoder",
             daemon=True,
         )
@@ -218,6 +308,7 @@ class StableSlotWorker:
         _terminate_process(decoder.process)
         decoder.reader.join(timeout=2)
         decoder.stderr_reader.join(timeout=1)
+        self.latest_frame.reset()
 
     def _start_encoder(self) -> None:
         self._stop_encoder()
@@ -322,13 +413,19 @@ def build_decoder_command(settings: SlotSettings) -> list[str]:
         "-thread_queue_size",
         "512",
         "-fflags",
-        "+genpts+nobuffer",
+        "+genpts+nobuffer+discardcorrupt",
+        "-avioflags",
+        "direct",
         "-flags",
         "low_delay",
+        "-max_delay",
+        "0",
         "-probesize",
         "262144",
         "-analyzeduration",
         "2000000",
+        "-use_wallclock_as_timestamps",
+        "1",
     ]
     if settings.input_hwaccel == "vaapi":
         args.extend(
@@ -343,6 +440,7 @@ def build_decoder_command(settings: SlotSettings) -> list[str]:
         )
     if _is_rtsp_url(settings.input_url):
         args.extend(["-rtsp_transport", settings.input_rtsp_transport])
+        args.extend(["-reorder_queue_size", "0"])
     if _is_http_url(settings.input_url):
         args.extend(
             [
@@ -487,6 +585,7 @@ def parse_args(argv: list[str] | None = None) -> SlotSettings:
     parser.add_argument("--worker-rtsp-transport", default="tcp")
     parser.add_argument("--restart-delay-seconds", type=int, default=5)
     parser.add_argument("--stall-timeout-seconds", type=int, default=3)
+    parser.add_argument("--freeze-timeout-seconds", type=int, default=20)
     parser.add_argument("--bitrate", default="1200k")
     args = parser.parse_args(argv)
     return SlotSettings(
@@ -510,6 +609,7 @@ def parse_args(argv: list[str] | None = None) -> SlotSettings:
         worker_rtsp_transport=args.worker_rtsp_transport,
         restart_delay_seconds=max(1, args.restart_delay_seconds),
         stall_timeout_seconds=max(0, args.stall_timeout_seconds),
+        freeze_timeout_seconds=max(0, args.freeze_timeout_seconds),
         bitrate=args.bitrate,
     )
 
@@ -528,6 +628,8 @@ def _read_decoder_frames(
     process: subprocess.Popen[bytes],
     latest_frame: LatestFrame,
     size: int,
+    fps: int,
+    catchup_timeout_seconds: int,
 ) -> None:
     if not process.stdout:
         return
@@ -535,7 +637,7 @@ def _read_decoder_frames(
         frame = _read_exact(process.stdout, size)
         if frame is None:
             return
-        latest_frame.update(frame)
+        latest_frame.update(frame, fps, catchup_timeout_seconds)
 
 
 def _read_exact(stream: object, size: int) -> bytes | None:

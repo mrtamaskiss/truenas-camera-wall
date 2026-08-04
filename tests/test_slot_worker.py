@@ -1,6 +1,8 @@
+import time
 import unittest
 
 from camera_wall.slot_worker import (
+    LatestFrame,
     SlotSettings,
     black_yuv420p_frame,
     build_decoder_command,
@@ -32,6 +34,7 @@ def make_settings(**overrides):
         "worker_rtsp_transport": "tcp",
         "restart_delay_seconds": 5,
         "stall_timeout_seconds": 3,
+        "freeze_timeout_seconds": 20,
         "bitrate": "1200k",
     }
     values.update(overrides)
@@ -44,8 +47,15 @@ class SlotWorkerTests(unittest.TestCase):
 
         self.assertIn("-rtsp_transport", command)
         self.assertIn("tcp", command)
-        self.assertIn("+genpts+nobuffer", command)
+        self.assertIn("+genpts+nobuffer+discardcorrupt", command)
+        self.assertIn("-avioflags", command)
+        self.assertEqual(command[command.index("-avioflags") + 1], "direct")
         self.assertIn("low_delay", command)
+        self.assertIn("-max_delay", command)
+        self.assertEqual(command[command.index("-max_delay") + 1], "0")
+        self.assertIn("-reorder_queue_size", command)
+        self.assertEqual(command[command.index("-reorder_queue_size") + 1], "0")
+        self.assertIn("-use_wallclock_as_timestamps", command)
         self.assertEqual(command[command.index("-probesize") + 1], "262144")
         self.assertEqual(command[command.index("-analyzeduration") + 1], "2000000")
         self.assertIn("-vf", command)
@@ -79,6 +89,24 @@ class SlotWorkerTests(unittest.TestCase):
 
         self.assertEqual(frame_size(settings), 12)
         self.assertEqual(len(black_yuv420p_frame(4, 2)), 12)
+
+    def test_latest_frame_holds_reconnect_frames_until_live_rate_returns(self) -> None:
+        latest = LatestFrame()
+        frame = b"abc"
+
+        latest.reset(catchup_seconds=20)
+        latest.update(frame, fps=15, catchup_timeout_seconds=20)
+        self.assertEqual(latest.snapshot()[0], None)
+        self.assertTrue(latest.snapshot()[2])
+
+        latest._catching_up_until = 0  # Exercise the release path without sleeping.
+        latest._last_read_at = time.monotonic() - 1
+        latest._normal_frame_streak = 14
+        latest.update(frame, fps=15, catchup_timeout_seconds=20)
+
+        snapshot = latest.snapshot()
+        self.assertEqual(snapshot[0], frame)
+        self.assertFalse(snapshot[2])
 
 
 if __name__ == "__main__":

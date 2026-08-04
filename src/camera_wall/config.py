@@ -75,6 +75,7 @@ class WorkerConfig:
     retry_live_seconds: int = 15
     retry_probe_timeout_seconds: int = 3
     stall_timeout_seconds: int = 3
+    freeze_timeout_seconds: int = 20
     wall_input_preflight: bool = False
 
 
@@ -223,6 +224,10 @@ def parse_config(raw: Mapping[str, Any], env: Mapping[str, str] | None = None) -
         ),
         stall_timeout_seconds=_nonnegative_int(
             workers_raw.get("stall_timeout_seconds", 3), "workers.stall_timeout_seconds"
+        ),
+        freeze_timeout_seconds=_nonnegative_int(
+            workers_raw.get("freeze_timeout_seconds", 20),
+            "workers.freeze_timeout_seconds",
         ),
         wall_input_preflight=_bool(
             workers_raw.get("wall_input_preflight", False), "workers.wall_input_preflight"
